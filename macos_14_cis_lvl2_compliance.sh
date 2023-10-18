@@ -1,5 +1,5 @@
 #!/bin/zsh
-
+set +e
 ##  This script will attempt to audit all of the settings based on the installed profile.
 
 ##  This script is provided as-is and should be fully tested on a system that is not in a production environment.
