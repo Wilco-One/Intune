@@ -57,6 +57,21 @@ pause(){
 vared -p "Press [Enter] key to continue..." -c fackEnterKey
 }
 
+# logging function
+logmessage(){
+    if [[ ! $quiet ]];then
+        echo "$(date -u) $1" | /usr/bin/tee -a "$audit_log"
+    elif [[ ${quiet[2][2]} == 1 ]];then
+        if [[ $1 == *" failed"* ]] || [[ $1 == *"exemption"* ]] ;then
+            echo "$(date -u) $1" | /usr/bin/tee -a "$audit_log"
+        else
+            echo "$(date -u) $1" | /usr/bin/tee -a "$audit_log" > /dev/null
+        fi
+    else
+        echo "$(date -u) $1" | /usr/bin/tee -a "$audit_log" > /dev/null
+    fi
+}
+
 ask() {
     # if fix flag is passed, assume YES for everything
     if [[ $fix ]] || [[ $cfc ]]; then
@@ -130,8 +145,15 @@ read_options(){
 
 # function to reset and remove plist file.  Used to clear out any previous findings
 reset_plist(){
-    echo "Clearing results from /Library/Preferences/org.cis_lvl2.audit.plist"
-    defaults delete /Library/Preferences/org.cis_lvl2.audit.plist
+    if [[ $reset_all ]];then
+        echo "Clearing results from all MSCP baselines"
+        find /Library/Preferences -name "org.*.audit.plist" -exec rm -f '{}' \;
+        find /Library/Logs -name "*_baseline.log" -exec rm -f '{}' \;
+    else
+        echo "Clearing results from /Library/Preferences/org.cis_lvl2.audit.plist"
+        rm -f /Library/Preferences/org.cis_lvl2.audit.plist
+        rm -f /Library/Logs/cis_lvl2_baseline.log
+    fi
 }
 
 # Generate the Compliant and Non-Compliant counts. Returns: Array (Compliant, Non-Compliant)
@@ -230,7 +252,6 @@ fi
 # * AU-9
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: audit_acls_files_configure ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/bin/ls -le $(/usr/bin/grep '^dir' /etc/security/audit_control | /usr/bin/awk -F: '{print $2}') | /usr/bin/awk '{print $1}' | /usr/bin/grep -c ":"
 )
@@ -248,20 +269,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('audit_acls_files_configure'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "audit_acls_files_configure" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "0" ]]; then
-        echo "$(date -u) audit_acls_files_configure passed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "audit_acls_files_configure passed (Result: $result_value, Expected: \"{'integer': 0}\")"
         /usr/bin/defaults write "$audit_plist" audit_acls_files_configure -dict-add finding -bool NO
+        if [[ ! "$customref" == "audit_acls_files_configure" ]]; then
+            /usr/bin/defaults write "$audit_plist" audit_acls_files_configure -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - audit_acls_files_configure passed (Result: $result_value, Expected: "{'integer': 0}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) audit_acls_files_configure failed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_acls_files_configure failed (Result: $result_value, Expected: \"{'integer': 0}\")"
             /usr/bin/defaults write "$audit_plist" audit_acls_files_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_acls_files_configure" ]]; then
+                /usr/bin/defaults write "$audit_plist" audit_acls_files_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_acls_files_configure failed (Result: $result_value, Expected: "{'integer': 0}")"
         else
-            echo "$(date -u) audit_acls_files_configure failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_acls_files_configure failed (Result: $result_value, Expected: \"{'integer': 0}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" audit_acls_files_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_acls_files_configure" ]]; then
+              /usr/bin/defaults write "$audit_plist" audit_acls_files_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_acls_files_configure failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -269,7 +300,7 @@ EOS
 
 
 else
-    echo "$(date -u) audit_acls_files_configure does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "audit_acls_files_configure does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" audit_acls_files_configure -dict-add finding -bool NO
 fi
     
@@ -278,7 +309,6 @@ fi
 # * AU-9
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: audit_acls_folders_configure ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/bin/ls -lde /var/audit | /usr/bin/awk '{print $1}' | /usr/bin/grep -c ":"
 )
@@ -296,20 +326,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('audit_acls_folders_configure'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "audit_acls_folders_configure" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "0" ]]; then
-        echo "$(date -u) audit_acls_folders_configure passed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "audit_acls_folders_configure passed (Result: $result_value, Expected: \"{'integer': 0}\")"
         /usr/bin/defaults write "$audit_plist" audit_acls_folders_configure -dict-add finding -bool NO
+        if [[ ! "$customref" == "audit_acls_folders_configure" ]]; then
+            /usr/bin/defaults write "$audit_plist" audit_acls_folders_configure -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - audit_acls_folders_configure passed (Result: $result_value, Expected: "{'integer': 0}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) audit_acls_folders_configure failed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_acls_folders_configure failed (Result: $result_value, Expected: \"{'integer': 0}\")"
             /usr/bin/defaults write "$audit_plist" audit_acls_folders_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_acls_folders_configure" ]]; then
+                /usr/bin/defaults write "$audit_plist" audit_acls_folders_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_acls_folders_configure failed (Result: $result_value, Expected: "{'integer': 0}")"
         else
-            echo "$(date -u) audit_acls_folders_configure failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_acls_folders_configure failed (Result: $result_value, Expected: \"{'integer': 0}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" audit_acls_folders_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_acls_folders_configure" ]]; then
+              /usr/bin/defaults write "$audit_plist" audit_acls_folders_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_acls_folders_configure failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -317,7 +357,7 @@ EOS
 
 
 else
-    echo "$(date -u) audit_acls_folders_configure does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "audit_acls_folders_configure does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" audit_acls_folders_configure -dict-add finding -bool NO
 fi
     
@@ -331,7 +371,6 @@ fi
 # * MA-4(1)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: audit_auditd_enabled ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(LAUNCHD_RUNNING=$(/bin/launchctl list | /usr/bin/grep -c com.apple.auditd)
 AUDITD_RUNNING=$(/usr/sbin/audit -c | /usr/bin/grep -c "AUC_AUDITING")
@@ -355,20 +394,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('audit_auditd_enabled'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "audit_auditd_enabled" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "pass" ]]; then
-        echo "$(date -u) audit_auditd_enabled passed (Result: $result_value, Expected: "{'string': 'pass'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "audit_auditd_enabled passed (Result: $result_value, Expected: \"{'string': 'pass'}\")"
         /usr/bin/defaults write "$audit_plist" audit_auditd_enabled -dict-add finding -bool NO
+        if [[ ! "$customref" == "audit_auditd_enabled" ]]; then
+            /usr/bin/defaults write "$audit_plist" audit_auditd_enabled -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - audit_auditd_enabled passed (Result: $result_value, Expected: "{'string': 'pass'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) audit_auditd_enabled failed (Result: $result_value, Expected: "{'string': 'pass'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_auditd_enabled failed (Result: $result_value, Expected: \"{'string': 'pass'}\")"
             /usr/bin/defaults write "$audit_plist" audit_auditd_enabled -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_auditd_enabled" ]]; then
+                /usr/bin/defaults write "$audit_plist" audit_auditd_enabled -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_auditd_enabled failed (Result: $result_value, Expected: "{'string': 'pass'}")"
         else
-            echo "$(date -u) audit_auditd_enabled failed (Result: $result_value, Expected: "{'string': 'pass'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_auditd_enabled failed (Result: $result_value, Expected: \"{'string': 'pass'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" audit_auditd_enabled -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_auditd_enabled" ]]; then
+              /usr/bin/defaults write "$audit_plist" audit_auditd_enabled -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_auditd_enabled failed (Result: $result_value, Expected: "{'string': 'pass'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -376,7 +425,7 @@ EOS
 
 
 else
-    echo "$(date -u) audit_auditd_enabled does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "audit_auditd_enabled does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" audit_auditd_enabled -dict-add finding -bool NO
 fi
     
@@ -385,7 +434,6 @@ fi
 # * AU-9
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: audit_control_acls_configure ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/bin/ls -le /etc/security/audit_control | /usr/bin/awk '{print $1}' | /usr/bin/grep -c ":"
 )
@@ -403,20 +451,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('audit_control_acls_configure'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "audit_control_acls_configure" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "0" ]]; then
-        echo "$(date -u) audit_control_acls_configure passed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "audit_control_acls_configure passed (Result: $result_value, Expected: \"{'integer': 0}\")"
         /usr/bin/defaults write "$audit_plist" audit_control_acls_configure -dict-add finding -bool NO
+        if [[ ! "$customref" == "audit_control_acls_configure" ]]; then
+            /usr/bin/defaults write "$audit_plist" audit_control_acls_configure -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - audit_control_acls_configure passed (Result: $result_value, Expected: "{'integer': 0}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) audit_control_acls_configure failed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_control_acls_configure failed (Result: $result_value, Expected: \"{'integer': 0}\")"
             /usr/bin/defaults write "$audit_plist" audit_control_acls_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_control_acls_configure" ]]; then
+                /usr/bin/defaults write "$audit_plist" audit_control_acls_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_control_acls_configure failed (Result: $result_value, Expected: "{'integer': 0}")"
         else
-            echo "$(date -u) audit_control_acls_configure failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_control_acls_configure failed (Result: $result_value, Expected: \"{'integer': 0}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" audit_control_acls_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_control_acls_configure" ]]; then
+              /usr/bin/defaults write "$audit_plist" audit_control_acls_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_control_acls_configure failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -424,7 +482,7 @@ EOS
 
 
 else
-    echo "$(date -u) audit_control_acls_configure does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "audit_control_acls_configure does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" audit_control_acls_configure -dict-add finding -bool NO
 fi
     
@@ -433,7 +491,6 @@ fi
 # * AU-9
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: audit_control_group_configure ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/bin/ls -dn /etc/security/audit_control | /usr/bin/awk '{print $4}'
 )
@@ -451,20 +508,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('audit_control_group_configure'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "audit_control_group_configure" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "0" ]]; then
-        echo "$(date -u) audit_control_group_configure passed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "audit_control_group_configure passed (Result: $result_value, Expected: \"{'integer': 0}\")"
         /usr/bin/defaults write "$audit_plist" audit_control_group_configure -dict-add finding -bool NO
+        if [[ ! "$customref" == "audit_control_group_configure" ]]; then
+            /usr/bin/defaults write "$audit_plist" audit_control_group_configure -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - audit_control_group_configure passed (Result: $result_value, Expected: "{'integer': 0}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) audit_control_group_configure failed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_control_group_configure failed (Result: $result_value, Expected: \"{'integer': 0}\")"
             /usr/bin/defaults write "$audit_plist" audit_control_group_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_control_group_configure" ]]; then
+                /usr/bin/defaults write "$audit_plist" audit_control_group_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_control_group_configure failed (Result: $result_value, Expected: "{'integer': 0}")"
         else
-            echo "$(date -u) audit_control_group_configure failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_control_group_configure failed (Result: $result_value, Expected: \"{'integer': 0}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" audit_control_group_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_control_group_configure" ]]; then
+              /usr/bin/defaults write "$audit_plist" audit_control_group_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_control_group_configure failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -472,7 +539,7 @@ EOS
 
 
 else
-    echo "$(date -u) audit_control_group_configure does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "audit_control_group_configure does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" audit_control_group_configure -dict-add finding -bool NO
 fi
     
@@ -481,7 +548,6 @@ fi
 # * AU-9
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: audit_control_mode_configure ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/bin/ls -l /etc/security/audit_control | /usr/bin/awk '!/-r--[r-]-----|current|total/{print $1}' | /usr/bin/wc -l | /usr/bin/xargs
 )
@@ -499,20 +565,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('audit_control_mode_configure'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "audit_control_mode_configure" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "0" ]]; then
-        echo "$(date -u) audit_control_mode_configure passed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "audit_control_mode_configure passed (Result: $result_value, Expected: \"{'integer': 0}\")"
         /usr/bin/defaults write "$audit_plist" audit_control_mode_configure -dict-add finding -bool NO
+        if [[ ! "$customref" == "audit_control_mode_configure" ]]; then
+            /usr/bin/defaults write "$audit_plist" audit_control_mode_configure -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - audit_control_mode_configure passed (Result: $result_value, Expected: "{'integer': 0}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) audit_control_mode_configure failed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_control_mode_configure failed (Result: $result_value, Expected: \"{'integer': 0}\")"
             /usr/bin/defaults write "$audit_plist" audit_control_mode_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_control_mode_configure" ]]; then
+                /usr/bin/defaults write "$audit_plist" audit_control_mode_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_control_mode_configure failed (Result: $result_value, Expected: "{'integer': 0}")"
         else
-            echo "$(date -u) audit_control_mode_configure failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_control_mode_configure failed (Result: $result_value, Expected: \"{'integer': 0}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" audit_control_mode_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_control_mode_configure" ]]; then
+              /usr/bin/defaults write "$audit_plist" audit_control_mode_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_control_mode_configure failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -520,7 +596,7 @@ EOS
 
 
 else
-    echo "$(date -u) audit_control_mode_configure does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "audit_control_mode_configure does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" audit_control_mode_configure -dict-add finding -bool NO
 fi
     
@@ -529,7 +605,6 @@ fi
 # * AU-9
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: audit_control_owner_configure ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/bin/ls -dn /etc/security/audit_control | /usr/bin/awk '{print $3}'
 )
@@ -547,20 +622,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('audit_control_owner_configure'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "audit_control_owner_configure" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "0" ]]; then
-        echo "$(date -u) audit_control_owner_configure passed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "audit_control_owner_configure passed (Result: $result_value, Expected: \"{'integer': 0}\")"
         /usr/bin/defaults write "$audit_plist" audit_control_owner_configure -dict-add finding -bool NO
+        if [[ ! "$customref" == "audit_control_owner_configure" ]]; then
+            /usr/bin/defaults write "$audit_plist" audit_control_owner_configure -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - audit_control_owner_configure passed (Result: $result_value, Expected: "{'integer': 0}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) audit_control_owner_configure failed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_control_owner_configure failed (Result: $result_value, Expected: \"{'integer': 0}\")"
             /usr/bin/defaults write "$audit_plist" audit_control_owner_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_control_owner_configure" ]]; then
+                /usr/bin/defaults write "$audit_plist" audit_control_owner_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_control_owner_configure failed (Result: $result_value, Expected: "{'integer': 0}")"
         else
-            echo "$(date -u) audit_control_owner_configure failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_control_owner_configure failed (Result: $result_value, Expected: \"{'integer': 0}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" audit_control_owner_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_control_owner_configure" ]]; then
+              /usr/bin/defaults write "$audit_plist" audit_control_owner_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_control_owner_configure failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -568,7 +653,7 @@ EOS
 
 
 else
-    echo "$(date -u) audit_control_owner_configure does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "audit_control_owner_configure does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" audit_control_owner_configure -dict-add finding -bool NO
 fi
     
@@ -577,7 +662,6 @@ fi
 # * AU-9
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: audit_files_group_configure ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/bin/ls -n $(/usr/bin/grep '^dir' /etc/security/audit_control | /usr/bin/awk -F: '{print $2}') | /usr/bin/awk '{s+=$4} END {print s}'
 )
@@ -595,20 +679,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('audit_files_group_configure'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "audit_files_group_configure" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "0" ]]; then
-        echo "$(date -u) audit_files_group_configure passed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "audit_files_group_configure passed (Result: $result_value, Expected: \"{'integer': 0}\")"
         /usr/bin/defaults write "$audit_plist" audit_files_group_configure -dict-add finding -bool NO
+        if [[ ! "$customref" == "audit_files_group_configure" ]]; then
+            /usr/bin/defaults write "$audit_plist" audit_files_group_configure -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - audit_files_group_configure passed (Result: $result_value, Expected: "{'integer': 0}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) audit_files_group_configure failed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_files_group_configure failed (Result: $result_value, Expected: \"{'integer': 0}\")"
             /usr/bin/defaults write "$audit_plist" audit_files_group_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_files_group_configure" ]]; then
+                /usr/bin/defaults write "$audit_plist" audit_files_group_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_files_group_configure failed (Result: $result_value, Expected: "{'integer': 0}")"
         else
-            echo "$(date -u) audit_files_group_configure failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_files_group_configure failed (Result: $result_value, Expected: \"{'integer': 0}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" audit_files_group_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_files_group_configure" ]]; then
+              /usr/bin/defaults write "$audit_plist" audit_files_group_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_files_group_configure failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -616,7 +710,7 @@ EOS
 
 
 else
-    echo "$(date -u) audit_files_group_configure does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "audit_files_group_configure does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" audit_files_group_configure -dict-add finding -bool NO
 fi
     
@@ -625,7 +719,6 @@ fi
 # * AU-9
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: audit_files_mode_configure ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/bin/ls -l $(/usr/bin/grep '^dir' /etc/security/audit_control | /usr/bin/awk -F: '{print $2}') | /usr/bin/awk '!/-r--r-----|current|total/{print $1}' | /usr/bin/wc -l | /usr/bin/tr -d ' '
 )
@@ -643,20 +736,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('audit_files_mode_configure'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "audit_files_mode_configure" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "0" ]]; then
-        echo "$(date -u) audit_files_mode_configure passed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "audit_files_mode_configure passed (Result: $result_value, Expected: \"{'integer': 0}\")"
         /usr/bin/defaults write "$audit_plist" audit_files_mode_configure -dict-add finding -bool NO
+        if [[ ! "$customref" == "audit_files_mode_configure" ]]; then
+            /usr/bin/defaults write "$audit_plist" audit_files_mode_configure -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - audit_files_mode_configure passed (Result: $result_value, Expected: "{'integer': 0}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) audit_files_mode_configure failed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_files_mode_configure failed (Result: $result_value, Expected: \"{'integer': 0}\")"
             /usr/bin/defaults write "$audit_plist" audit_files_mode_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_files_mode_configure" ]]; then
+                /usr/bin/defaults write "$audit_plist" audit_files_mode_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_files_mode_configure failed (Result: $result_value, Expected: "{'integer': 0}")"
         else
-            echo "$(date -u) audit_files_mode_configure failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_files_mode_configure failed (Result: $result_value, Expected: \"{'integer': 0}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" audit_files_mode_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_files_mode_configure" ]]; then
+              /usr/bin/defaults write "$audit_plist" audit_files_mode_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_files_mode_configure failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -664,7 +767,7 @@ EOS
 
 
 else
-    echo "$(date -u) audit_files_mode_configure does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "audit_files_mode_configure does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" audit_files_mode_configure -dict-add finding -bool NO
 fi
     
@@ -673,7 +776,6 @@ fi
 # * AU-9
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: audit_files_owner_configure ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/bin/ls -n $(/usr/bin/grep '^dir' /etc/security/audit_control | /usr/bin/awk -F: '{print $2}') | /usr/bin/awk '{s+=$3} END {print s}'
 )
@@ -691,20 +793,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('audit_files_owner_configure'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "audit_files_owner_configure" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "0" ]]; then
-        echo "$(date -u) audit_files_owner_configure passed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "audit_files_owner_configure passed (Result: $result_value, Expected: \"{'integer': 0}\")"
         /usr/bin/defaults write "$audit_plist" audit_files_owner_configure -dict-add finding -bool NO
+        if [[ ! "$customref" == "audit_files_owner_configure" ]]; then
+            /usr/bin/defaults write "$audit_plist" audit_files_owner_configure -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - audit_files_owner_configure passed (Result: $result_value, Expected: "{'integer': 0}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) audit_files_owner_configure failed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_files_owner_configure failed (Result: $result_value, Expected: \"{'integer': 0}\")"
             /usr/bin/defaults write "$audit_plist" audit_files_owner_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_files_owner_configure" ]]; then
+                /usr/bin/defaults write "$audit_plist" audit_files_owner_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_files_owner_configure failed (Result: $result_value, Expected: "{'integer': 0}")"
         else
-            echo "$(date -u) audit_files_owner_configure failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_files_owner_configure failed (Result: $result_value, Expected: \"{'integer': 0}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" audit_files_owner_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_files_owner_configure" ]]; then
+              /usr/bin/defaults write "$audit_plist" audit_files_owner_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_files_owner_configure failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -712,7 +824,7 @@ EOS
 
 
 else
-    echo "$(date -u) audit_files_owner_configure does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "audit_files_owner_configure does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" audit_files_owner_configure -dict-add finding -bool NO
 fi
     
@@ -725,7 +837,6 @@ fi
 # * MA-4(1)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: audit_flags_aa_configure ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/awk -F':' '/^flags/ { print $NF }' /etc/security/audit_control | /usr/bin/tr ',' '\n' | /usr/bin/grep -Ec 'aa'
 )
@@ -743,20 +854,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('audit_flags_aa_configure'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "audit_flags_aa_configure" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) audit_flags_aa_configure passed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "audit_flags_aa_configure passed (Result: $result_value, Expected: \"{'integer': 1}\")"
         /usr/bin/defaults write "$audit_plist" audit_flags_aa_configure -dict-add finding -bool NO
+        if [[ ! "$customref" == "audit_flags_aa_configure" ]]; then
+            /usr/bin/defaults write "$audit_plist" audit_flags_aa_configure -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - audit_flags_aa_configure passed (Result: $result_value, Expected: "{'integer': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) audit_flags_aa_configure failed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_flags_aa_configure failed (Result: $result_value, Expected: \"{'integer': 1}\")"
             /usr/bin/defaults write "$audit_plist" audit_flags_aa_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_flags_aa_configure" ]]; then
+                /usr/bin/defaults write "$audit_plist" audit_flags_aa_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_flags_aa_configure failed (Result: $result_value, Expected: "{'integer': 1}")"
         else
-            echo "$(date -u) audit_flags_aa_configure failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_flags_aa_configure failed (Result: $result_value, Expected: \"{'integer': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" audit_flags_aa_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_flags_aa_configure" ]]; then
+              /usr/bin/defaults write "$audit_plist" audit_flags_aa_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_flags_aa_configure failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -764,7 +885,7 @@ EOS
 
 
 else
-    echo "$(date -u) audit_flags_aa_configure does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "audit_flags_aa_configure does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" audit_flags_aa_configure -dict-add finding -bool NO
 fi
     
@@ -778,7 +899,6 @@ fi
 # * MA-4(1)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: audit_flags_ad_configure ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/awk -F':' '/^flags/ { print $NF }' /etc/security/audit_control | /usr/bin/tr ',' '\n' | /usr/bin/grep -Ec 'ad'
 )
@@ -796,20 +916,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('audit_flags_ad_configure'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "audit_flags_ad_configure" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) audit_flags_ad_configure passed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "audit_flags_ad_configure passed (Result: $result_value, Expected: \"{'integer': 1}\")"
         /usr/bin/defaults write "$audit_plist" audit_flags_ad_configure -dict-add finding -bool NO
+        if [[ ! "$customref" == "audit_flags_ad_configure" ]]; then
+            /usr/bin/defaults write "$audit_plist" audit_flags_ad_configure -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - audit_flags_ad_configure passed (Result: $result_value, Expected: "{'integer': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) audit_flags_ad_configure failed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_flags_ad_configure failed (Result: $result_value, Expected: \"{'integer': 1}\")"
             /usr/bin/defaults write "$audit_plist" audit_flags_ad_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_flags_ad_configure" ]]; then
+                /usr/bin/defaults write "$audit_plist" audit_flags_ad_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_flags_ad_configure failed (Result: $result_value, Expected: "{'integer': 1}")"
         else
-            echo "$(date -u) audit_flags_ad_configure failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_flags_ad_configure failed (Result: $result_value, Expected: \"{'integer': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" audit_flags_ad_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_flags_ad_configure" ]]; then
+              /usr/bin/defaults write "$audit_plist" audit_flags_ad_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_flags_ad_configure failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -817,7 +947,7 @@ EOS
 
 
 else
-    echo "$(date -u) audit_flags_ad_configure does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "audit_flags_ad_configure does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" audit_flags_ad_configure -dict-add finding -bool NO
 fi
     
@@ -829,7 +959,6 @@ fi
 # * CM-5(1)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: audit_flags_ex_configure ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/awk -F':' '/^flags/ { print $NF }' /etc/security/audit_control | /usr/bin/tr ',' '\n' | /usr/bin/grep -Ec '\-ex'
 )
@@ -847,20 +976,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('audit_flags_ex_configure'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "audit_flags_ex_configure" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) audit_flags_ex_configure passed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "audit_flags_ex_configure passed (Result: $result_value, Expected: \"{'integer': 1}\")"
         /usr/bin/defaults write "$audit_plist" audit_flags_ex_configure -dict-add finding -bool NO
+        if [[ ! "$customref" == "audit_flags_ex_configure" ]]; then
+            /usr/bin/defaults write "$audit_plist" audit_flags_ex_configure -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - audit_flags_ex_configure passed (Result: $result_value, Expected: "{'integer': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) audit_flags_ex_configure failed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_flags_ex_configure failed (Result: $result_value, Expected: \"{'integer': 1}\")"
             /usr/bin/defaults write "$audit_plist" audit_flags_ex_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_flags_ex_configure" ]]; then
+                /usr/bin/defaults write "$audit_plist" audit_flags_ex_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_flags_ex_configure failed (Result: $result_value, Expected: "{'integer': 1}")"
         else
-            echo "$(date -u) audit_flags_ex_configure failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_flags_ex_configure failed (Result: $result_value, Expected: \"{'integer': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" audit_flags_ex_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_flags_ex_configure" ]]; then
+              /usr/bin/defaults write "$audit_plist" audit_flags_ex_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_flags_ex_configure failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -868,7 +1007,7 @@ EOS
 
 
 else
-    echo "$(date -u) audit_flags_ex_configure does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "audit_flags_ex_configure does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" audit_flags_ex_configure -dict-add finding -bool NO
 fi
     
@@ -882,7 +1021,6 @@ fi
 # * MA-4(1)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: audit_flags_fm_failed_configure ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/awk -F':' '/^flags/ { print $NF }' /etc/security/audit_control | /usr/bin/tr ',' '\n' | /usr/bin/grep -Ec '\-fm'
 )
@@ -900,20 +1038,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('audit_flags_fm_failed_configure'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "audit_flags_fm_failed_configure" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) audit_flags_fm_failed_configure passed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "audit_flags_fm_failed_configure passed (Result: $result_value, Expected: \"{'integer': 1}\")"
         /usr/bin/defaults write "$audit_plist" audit_flags_fm_failed_configure -dict-add finding -bool NO
+        if [[ ! "$customref" == "audit_flags_fm_failed_configure" ]]; then
+            /usr/bin/defaults write "$audit_plist" audit_flags_fm_failed_configure -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - audit_flags_fm_failed_configure passed (Result: $result_value, Expected: "{'integer': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) audit_flags_fm_failed_configure failed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_flags_fm_failed_configure failed (Result: $result_value, Expected: \"{'integer': 1}\")"
             /usr/bin/defaults write "$audit_plist" audit_flags_fm_failed_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_flags_fm_failed_configure" ]]; then
+                /usr/bin/defaults write "$audit_plist" audit_flags_fm_failed_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_flags_fm_failed_configure failed (Result: $result_value, Expected: "{'integer': 1}")"
         else
-            echo "$(date -u) audit_flags_fm_failed_configure failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_flags_fm_failed_configure failed (Result: $result_value, Expected: \"{'integer': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" audit_flags_fm_failed_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_flags_fm_failed_configure" ]]; then
+              /usr/bin/defaults write "$audit_plist" audit_flags_fm_failed_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_flags_fm_failed_configure failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -921,7 +1069,7 @@ EOS
 
 
 else
-    echo "$(date -u) audit_flags_fm_failed_configure does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "audit_flags_fm_failed_configure does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" audit_flags_fm_failed_configure -dict-add finding -bool NO
 fi
     
@@ -935,7 +1083,6 @@ fi
 # * MA-4(1)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: audit_flags_fr_configure ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/awk -F':' '/^flags/ { print $NF }' /etc/security/audit_control | /usr/bin/tr ',' '\n' | /usr/bin/grep -Ec '\-fr'
 )
@@ -953,20 +1100,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('audit_flags_fr_configure'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "audit_flags_fr_configure" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) audit_flags_fr_configure passed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "audit_flags_fr_configure passed (Result: $result_value, Expected: \"{'integer': 1}\")"
         /usr/bin/defaults write "$audit_plist" audit_flags_fr_configure -dict-add finding -bool NO
+        if [[ ! "$customref" == "audit_flags_fr_configure" ]]; then
+            /usr/bin/defaults write "$audit_plist" audit_flags_fr_configure -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - audit_flags_fr_configure passed (Result: $result_value, Expected: "{'integer': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) audit_flags_fr_configure failed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_flags_fr_configure failed (Result: $result_value, Expected: \"{'integer': 1}\")"
             /usr/bin/defaults write "$audit_plist" audit_flags_fr_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_flags_fr_configure" ]]; then
+                /usr/bin/defaults write "$audit_plist" audit_flags_fr_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_flags_fr_configure failed (Result: $result_value, Expected: "{'integer': 1}")"
         else
-            echo "$(date -u) audit_flags_fr_configure failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_flags_fr_configure failed (Result: $result_value, Expected: \"{'integer': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" audit_flags_fr_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_flags_fr_configure" ]]; then
+              /usr/bin/defaults write "$audit_plist" audit_flags_fr_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_flags_fr_configure failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -974,7 +1131,7 @@ EOS
 
 
 else
-    echo "$(date -u) audit_flags_fr_configure does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "audit_flags_fr_configure does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" audit_flags_fr_configure -dict-add finding -bool NO
 fi
     
@@ -988,7 +1145,6 @@ fi
 # * MA-4(1)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: audit_flags_fw_configure ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/awk -F':' '/^flags/ { print $NF }' /etc/security/audit_control | /usr/bin/tr ',' '\n' | /usr/bin/grep -Ec '\-fw'
 )
@@ -1006,20 +1162,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('audit_flags_fw_configure'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "audit_flags_fw_configure" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) audit_flags_fw_configure passed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "audit_flags_fw_configure passed (Result: $result_value, Expected: \"{'integer': 1}\")"
         /usr/bin/defaults write "$audit_plist" audit_flags_fw_configure -dict-add finding -bool NO
+        if [[ ! "$customref" == "audit_flags_fw_configure" ]]; then
+            /usr/bin/defaults write "$audit_plist" audit_flags_fw_configure -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - audit_flags_fw_configure passed (Result: $result_value, Expected: "{'integer': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) audit_flags_fw_configure failed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_flags_fw_configure failed (Result: $result_value, Expected: \"{'integer': 1}\")"
             /usr/bin/defaults write "$audit_plist" audit_flags_fw_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_flags_fw_configure" ]]; then
+                /usr/bin/defaults write "$audit_plist" audit_flags_fw_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_flags_fw_configure failed (Result: $result_value, Expected: "{'integer': 1}")"
         else
-            echo "$(date -u) audit_flags_fw_configure failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_flags_fw_configure failed (Result: $result_value, Expected: \"{'integer': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" audit_flags_fw_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_flags_fw_configure" ]]; then
+              /usr/bin/defaults write "$audit_plist" audit_flags_fw_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_flags_fw_configure failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -1027,7 +1193,7 @@ EOS
 
 
 else
-    echo "$(date -u) audit_flags_fw_configure does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "audit_flags_fw_configure does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" audit_flags_fw_configure -dict-add finding -bool NO
 fi
     
@@ -1040,7 +1206,6 @@ fi
 # * MA-4(1)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: audit_flags_lo_configure ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/awk -F':' '/^flags/ { print $NF }' /etc/security/audit_control | /usr/bin/tr ',' '\n' | /usr/bin/grep -Ec '^lo'
 )
@@ -1058,20 +1223,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('audit_flags_lo_configure'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "audit_flags_lo_configure" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) audit_flags_lo_configure passed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "audit_flags_lo_configure passed (Result: $result_value, Expected: \"{'integer': 1}\")"
         /usr/bin/defaults write "$audit_plist" audit_flags_lo_configure -dict-add finding -bool NO
+        if [[ ! "$customref" == "audit_flags_lo_configure" ]]; then
+            /usr/bin/defaults write "$audit_plist" audit_flags_lo_configure -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - audit_flags_lo_configure passed (Result: $result_value, Expected: "{'integer': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) audit_flags_lo_configure failed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_flags_lo_configure failed (Result: $result_value, Expected: \"{'integer': 1}\")"
             /usr/bin/defaults write "$audit_plist" audit_flags_lo_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_flags_lo_configure" ]]; then
+                /usr/bin/defaults write "$audit_plist" audit_flags_lo_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_flags_lo_configure failed (Result: $result_value, Expected: "{'integer': 1}")"
         else
-            echo "$(date -u) audit_flags_lo_configure failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_flags_lo_configure failed (Result: $result_value, Expected: \"{'integer': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" audit_flags_lo_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_flags_lo_configure" ]]; then
+              /usr/bin/defaults write "$audit_plist" audit_flags_lo_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_flags_lo_configure failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -1079,7 +1254,7 @@ EOS
 
 
 else
-    echo "$(date -u) audit_flags_lo_configure does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "audit_flags_lo_configure does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" audit_flags_lo_configure -dict-add finding -bool NO
 fi
     
@@ -1088,7 +1263,6 @@ fi
 # * AU-9
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: audit_folder_group_configure ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/bin/ls -dn $(/usr/bin/grep '^dir' /etc/security/audit_control | /usr/bin/awk -F: '{print $2}') | /usr/bin/awk '{print $4}'
 )
@@ -1106,20 +1280,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('audit_folder_group_configure'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "audit_folder_group_configure" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "0" ]]; then
-        echo "$(date -u) audit_folder_group_configure passed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "audit_folder_group_configure passed (Result: $result_value, Expected: \"{'integer': 0}\")"
         /usr/bin/defaults write "$audit_plist" audit_folder_group_configure -dict-add finding -bool NO
+        if [[ ! "$customref" == "audit_folder_group_configure" ]]; then
+            /usr/bin/defaults write "$audit_plist" audit_folder_group_configure -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - audit_folder_group_configure passed (Result: $result_value, Expected: "{'integer': 0}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) audit_folder_group_configure failed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_folder_group_configure failed (Result: $result_value, Expected: \"{'integer': 0}\")"
             /usr/bin/defaults write "$audit_plist" audit_folder_group_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_folder_group_configure" ]]; then
+                /usr/bin/defaults write "$audit_plist" audit_folder_group_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_folder_group_configure failed (Result: $result_value, Expected: "{'integer': 0}")"
         else
-            echo "$(date -u) audit_folder_group_configure failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_folder_group_configure failed (Result: $result_value, Expected: \"{'integer': 0}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" audit_folder_group_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_folder_group_configure" ]]; then
+              /usr/bin/defaults write "$audit_plist" audit_folder_group_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_folder_group_configure failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -1127,7 +1311,7 @@ EOS
 
 
 else
-    echo "$(date -u) audit_folder_group_configure does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "audit_folder_group_configure does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" audit_folder_group_configure -dict-add finding -bool NO
 fi
     
@@ -1136,7 +1320,6 @@ fi
 # * AU-9
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: audit_folder_owner_configure ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/bin/ls -dn $(/usr/bin/grep '^dir' /etc/security/audit_control | /usr/bin/awk -F: '{print $2}') | /usr/bin/awk '{print $3}'
 )
@@ -1154,20 +1337,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('audit_folder_owner_configure'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "audit_folder_owner_configure" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "0" ]]; then
-        echo "$(date -u) audit_folder_owner_configure passed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "audit_folder_owner_configure passed (Result: $result_value, Expected: \"{'integer': 0}\")"
         /usr/bin/defaults write "$audit_plist" audit_folder_owner_configure -dict-add finding -bool NO
+        if [[ ! "$customref" == "audit_folder_owner_configure" ]]; then
+            /usr/bin/defaults write "$audit_plist" audit_folder_owner_configure -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - audit_folder_owner_configure passed (Result: $result_value, Expected: "{'integer': 0}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) audit_folder_owner_configure failed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_folder_owner_configure failed (Result: $result_value, Expected: \"{'integer': 0}\")"
             /usr/bin/defaults write "$audit_plist" audit_folder_owner_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_folder_owner_configure" ]]; then
+                /usr/bin/defaults write "$audit_plist" audit_folder_owner_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_folder_owner_configure failed (Result: $result_value, Expected: "{'integer': 0}")"
         else
-            echo "$(date -u) audit_folder_owner_configure failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_folder_owner_configure failed (Result: $result_value, Expected: \"{'integer': 0}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" audit_folder_owner_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_folder_owner_configure" ]]; then
+              /usr/bin/defaults write "$audit_plist" audit_folder_owner_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_folder_owner_configure failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -1175,7 +1368,7 @@ EOS
 
 
 else
-    echo "$(date -u) audit_folder_owner_configure does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "audit_folder_owner_configure does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" audit_folder_owner_configure -dict-add finding -bool NO
 fi
     
@@ -1184,7 +1377,6 @@ fi
 # * AU-9
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: audit_folders_mode_configure ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/stat -f %A $(/usr/bin/grep '^dir' /etc/security/audit_control | /usr/bin/awk -F: '{print $2}')
 )
@@ -1202,20 +1394,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('audit_folders_mode_configure'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "audit_folders_mode_configure" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "700" ]]; then
-        echo "$(date -u) audit_folders_mode_configure passed (Result: $result_value, Expected: "{'integer': 700}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "audit_folders_mode_configure passed (Result: $result_value, Expected: \"{'integer': 700}\")"
         /usr/bin/defaults write "$audit_plist" audit_folders_mode_configure -dict-add finding -bool NO
+        if [[ ! "$customref" == "audit_folders_mode_configure" ]]; then
+            /usr/bin/defaults write "$audit_plist" audit_folders_mode_configure -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - audit_folders_mode_configure passed (Result: $result_value, Expected: "{'integer': 700}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) audit_folders_mode_configure failed (Result: $result_value, Expected: "{'integer': 700}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_folders_mode_configure failed (Result: $result_value, Expected: \"{'integer': 700}\")"
             /usr/bin/defaults write "$audit_plist" audit_folders_mode_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_folders_mode_configure" ]]; then
+                /usr/bin/defaults write "$audit_plist" audit_folders_mode_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_folders_mode_configure failed (Result: $result_value, Expected: "{'integer': 700}")"
         else
-            echo "$(date -u) audit_folders_mode_configure failed (Result: $result_value, Expected: "{'integer': 700}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_folders_mode_configure failed (Result: $result_value, Expected: \"{'integer': 700}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" audit_folders_mode_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_folders_mode_configure" ]]; then
+              /usr/bin/defaults write "$audit_plist" audit_folders_mode_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_folders_mode_configure failed (Result: $result_value, Expected: "{'integer': 700}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -1223,7 +1425,7 @@ EOS
 
 
 else
-    echo "$(date -u) audit_folders_mode_configure does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "audit_folders_mode_configure does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" audit_folders_mode_configure -dict-add finding -bool NO
 fi
     
@@ -1233,7 +1435,6 @@ fi
 # * AU-4
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: audit_retention_configure ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/awk -F: '/expire-after/{print $2}' /etc/security/audit_control
 )
@@ -1251,20 +1452,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('audit_retention_configure'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "audit_retention_configure" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "60d OR 5G" ]]; then
-        echo "$(date -u) audit_retention_configure passed (Result: $result_value, Expected: "{'string': '60d or 5g'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "audit_retention_configure passed (Result: $result_value, Expected: \"{'string': '60d or 5g'}\")"
         /usr/bin/defaults write "$audit_plist" audit_retention_configure -dict-add finding -bool NO
+        if [[ ! "$customref" == "audit_retention_configure" ]]; then
+            /usr/bin/defaults write "$audit_plist" audit_retention_configure -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - audit_retention_configure passed (Result: $result_value, Expected: "{'string': '60d or 5g'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) audit_retention_configure failed (Result: $result_value, Expected: "{'string': '60d or 5g'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_retention_configure failed (Result: $result_value, Expected: \"{'string': '60d or 5g'}\")"
             /usr/bin/defaults write "$audit_plist" audit_retention_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_retention_configure" ]]; then
+                /usr/bin/defaults write "$audit_plist" audit_retention_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_retention_configure failed (Result: $result_value, Expected: "{'string': '60d or 5g'}")"
         else
-            echo "$(date -u) audit_retention_configure failed (Result: $result_value, Expected: "{'string': '60d or 5g'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "audit_retention_configure failed (Result: $result_value, Expected: \"{'string': '60d or 5g'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" audit_retention_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "audit_retention_configure" ]]; then
+              /usr/bin/defaults write "$audit_plist" audit_retention_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - audit_retention_configure failed (Result: $result_value, Expected: "{'string': '60d or 5g'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -1272,7 +1483,7 @@ EOS
 
 
 else
-    echo "$(date -u) audit_retention_configure does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "audit_retention_configure does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" audit_retention_configure -dict-add finding -bool NO
 fi
     
@@ -1283,7 +1494,6 @@ fi
 # * SC-7(10)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: icloud_sync_disable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/osascript -l JavaScript << EOS
 $.NSUserDefaults.alloc.initWithSuiteName('com.apple.applicationaccess')\
@@ -1304,20 +1514,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('icloud_sync_disable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "icloud_sync_disable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "false" ]]; then
-        echo "$(date -u) icloud_sync_disable passed (Result: $result_value, Expected: "{'string': 'false'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "icloud_sync_disable passed (Result: $result_value, Expected: \"{'string': 'false'}\")"
         /usr/bin/defaults write "$audit_plist" icloud_sync_disable -dict-add finding -bool NO
+        if [[ ! "$customref" == "icloud_sync_disable" ]]; then
+            /usr/bin/defaults write "$audit_plist" icloud_sync_disable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - icloud_sync_disable passed (Result: $result_value, Expected: "{'string': 'false'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) icloud_sync_disable failed (Result: $result_value, Expected: "{'string': 'false'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "icloud_sync_disable failed (Result: $result_value, Expected: \"{'string': 'false'}\")"
             /usr/bin/defaults write "$audit_plist" icloud_sync_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "icloud_sync_disable" ]]; then
+                /usr/bin/defaults write "$audit_plist" icloud_sync_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - icloud_sync_disable failed (Result: $result_value, Expected: "{'string': 'false'}")"
         else
-            echo "$(date -u) icloud_sync_disable failed (Result: $result_value, Expected: "{'string': 'false'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "icloud_sync_disable failed (Result: $result_value, Expected: \"{'string': 'false'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" icloud_sync_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "icloud_sync_disable" ]]; then
+              /usr/bin/defaults write "$audit_plist" icloud_sync_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - icloud_sync_disable failed (Result: $result_value, Expected: "{'string': 'false'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -1325,7 +1545,7 @@ EOS
 
 
 else
-    echo "$(date -u) icloud_sync_disable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "icloud_sync_disable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" icloud_sync_disable -dict-add finding -bool NO
 fi
     
@@ -1336,7 +1556,6 @@ fi
 # * CM-7, CM-7(1)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_airdrop_disable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/osascript -l JavaScript << EOS
 $.NSUserDefaults.alloc.initWithSuiteName('com.apple.applicationaccess')\
@@ -1357,20 +1576,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_airdrop_disable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_airdrop_disable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "false" ]]; then
-        echo "$(date -u) os_airdrop_disable passed (Result: $result_value, Expected: "{'string': 'false'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_airdrop_disable passed (Result: $result_value, Expected: \"{'string': 'false'}\")"
         /usr/bin/defaults write "$audit_plist" os_airdrop_disable -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_airdrop_disable" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_airdrop_disable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_airdrop_disable passed (Result: $result_value, Expected: "{'string': 'false'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_airdrop_disable failed (Result: $result_value, Expected: "{'string': 'false'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_airdrop_disable failed (Result: $result_value, Expected: \"{'string': 'false'}\")"
             /usr/bin/defaults write "$audit_plist" os_airdrop_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_airdrop_disable" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_airdrop_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_airdrop_disable failed (Result: $result_value, Expected: "{'string': 'false'}")"
         else
-            echo "$(date -u) os_airdrop_disable failed (Result: $result_value, Expected: "{'string': 'false'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_airdrop_disable failed (Result: $result_value, Expected: \"{'string': 'false'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_airdrop_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_airdrop_disable" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_airdrop_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_airdrop_disable failed (Result: $result_value, Expected: "{'string': 'false'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -1378,7 +1607,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_airdrop_disable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_airdrop_disable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_airdrop_disable -dict-add finding -bool NO
 fi
     
@@ -1387,7 +1616,6 @@ fi
 # * N/A
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_anti_virus_installed ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/bin/launchctl list | /usr/bin/grep -cE "(com.apple.XprotectFramework.PluginService$|com.apple.XProtect.daemon.scan$)"
 )
@@ -1405,20 +1633,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_anti_virus_installed'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_anti_virus_installed" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "2" ]]; then
-        echo "$(date -u) os_anti_virus_installed passed (Result: $result_value, Expected: "{'integer': 2}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_anti_virus_installed passed (Result: $result_value, Expected: \"{'integer': 2}\")"
         /usr/bin/defaults write "$audit_plist" os_anti_virus_installed -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_anti_virus_installed" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_anti_virus_installed -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_anti_virus_installed passed (Result: $result_value, Expected: "{'integer': 2}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_anti_virus_installed failed (Result: $result_value, Expected: "{'integer': 2}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_anti_virus_installed failed (Result: $result_value, Expected: \"{'integer': 2}\")"
             /usr/bin/defaults write "$audit_plist" os_anti_virus_installed -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_anti_virus_installed" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_anti_virus_installed -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_anti_virus_installed failed (Result: $result_value, Expected: "{'integer': 2}")"
         else
-            echo "$(date -u) os_anti_virus_installed failed (Result: $result_value, Expected: "{'integer': 2}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_anti_virus_installed failed (Result: $result_value, Expected: \"{'integer': 2}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_anti_virus_installed -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_anti_virus_installed" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_anti_virus_installed -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_anti_virus_installed failed (Result: $result_value, Expected: "{'integer': 2}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -1426,7 +1664,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_anti_virus_installed does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_anti_virus_installed does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_anti_virus_installed -dict-add finding -bool NO
 fi
     
@@ -1439,7 +1677,6 @@ fi
 # * SI-7, SI-7(6)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_authenticated_root_enable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/csrutil authenticated-root | /usr/bin/grep -c 'enabled'
 )
@@ -1457,20 +1694,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_authenticated_root_enable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_authenticated_root_enable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) os_authenticated_root_enable passed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_authenticated_root_enable passed (Result: $result_value, Expected: \"{'integer': 1}\")"
         /usr/bin/defaults write "$audit_plist" os_authenticated_root_enable -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_authenticated_root_enable" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_authenticated_root_enable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_authenticated_root_enable passed (Result: $result_value, Expected: "{'integer': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_authenticated_root_enable failed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_authenticated_root_enable failed (Result: $result_value, Expected: \"{'integer': 1}\")"
             /usr/bin/defaults write "$audit_plist" os_authenticated_root_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_authenticated_root_enable" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_authenticated_root_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_authenticated_root_enable failed (Result: $result_value, Expected: "{'integer': 1}")"
         else
-            echo "$(date -u) os_authenticated_root_enable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_authenticated_root_enable failed (Result: $result_value, Expected: \"{'integer': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_authenticated_root_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_authenticated_root_enable" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_authenticated_root_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_authenticated_root_enable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -1478,7 +1725,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_authenticated_root_enable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_authenticated_root_enable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_authenticated_root_enable -dict-add finding -bool NO
 fi
     
@@ -1487,7 +1734,6 @@ fi
 # * CM-7, CM-7(1)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_bonjour_disable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/osascript -l JavaScript << EOS
 $.NSUserDefaults.alloc.initWithSuiteName('com.apple.mDNSResponder')\
@@ -1508,20 +1754,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_bonjour_disable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_bonjour_disable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "true" ]]; then
-        echo "$(date -u) os_bonjour_disable passed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_bonjour_disable passed (Result: $result_value, Expected: \"{'string': 'true'}\")"
         /usr/bin/defaults write "$audit_plist" os_bonjour_disable -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_bonjour_disable" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_bonjour_disable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_bonjour_disable passed (Result: $result_value, Expected: "{'string': 'true'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_bonjour_disable failed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_bonjour_disable failed (Result: $result_value, Expected: \"{'string': 'true'}\")"
             /usr/bin/defaults write "$audit_plist" os_bonjour_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_bonjour_disable" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_bonjour_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_bonjour_disable failed (Result: $result_value, Expected: "{'string': 'true'}")"
         else
-            echo "$(date -u) os_bonjour_disable failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_bonjour_disable failed (Result: $result_value, Expected: \"{'string': 'true'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_bonjour_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_bonjour_disable" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_bonjour_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_bonjour_disable failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -1529,7 +1785,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_bonjour_disable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_bonjour_disable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_bonjour_disable -dict-add finding -bool NO
 fi
     
@@ -1539,7 +1795,6 @@ fi
 # * SI-3
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_config_data_install_enforce ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/osascript -l JavaScript << EOS
 $.NSUserDefaults.alloc.initWithSuiteName('com.apple.SoftwareUpdate')\
@@ -1560,20 +1815,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_config_data_install_enforce'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_config_data_install_enforce" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "true" ]]; then
-        echo "$(date -u) os_config_data_install_enforce passed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_config_data_install_enforce passed (Result: $result_value, Expected: \"{'string': 'true'}\")"
         /usr/bin/defaults write "$audit_plist" os_config_data_install_enforce -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_config_data_install_enforce" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_config_data_install_enforce -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_config_data_install_enforce passed (Result: $result_value, Expected: "{'string': 'true'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_config_data_install_enforce failed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_config_data_install_enforce failed (Result: $result_value, Expected: \"{'string': 'true'}\")"
             /usr/bin/defaults write "$audit_plist" os_config_data_install_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_config_data_install_enforce" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_config_data_install_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_config_data_install_enforce failed (Result: $result_value, Expected: "{'string': 'true'}")"
         else
-            echo "$(date -u) os_config_data_install_enforce failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_config_data_install_enforce failed (Result: $result_value, Expected: \"{'string': 'true'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_config_data_install_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_config_data_install_enforce" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_config_data_install_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_config_data_install_enforce failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -1581,7 +1846,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_config_data_install_enforce does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_config_data_install_enforce does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_config_data_install_enforce -dict-add finding -bool NO
 fi
     
@@ -1591,7 +1856,6 @@ fi
 # * SC-7
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_firewall_log_enable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/osascript -l JavaScript << EOS
 function run() {
@@ -1621,20 +1885,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_firewall_log_enable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_firewall_log_enable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "true" ]]; then
-        echo "$(date -u) os_firewall_log_enable passed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_firewall_log_enable passed (Result: $result_value, Expected: \"{'string': 'true'}\")"
         /usr/bin/defaults write "$audit_plist" os_firewall_log_enable -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_firewall_log_enable" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_firewall_log_enable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_firewall_log_enable passed (Result: $result_value, Expected: "{'string': 'true'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_firewall_log_enable failed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_firewall_log_enable failed (Result: $result_value, Expected: \"{'string': 'true'}\")"
             /usr/bin/defaults write "$audit_plist" os_firewall_log_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_firewall_log_enable" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_firewall_log_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_firewall_log_enable failed (Result: $result_value, Expected: "{'string': 'true'}")"
         else
-            echo "$(date -u) os_firewall_log_enable failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_firewall_log_enable failed (Result: $result_value, Expected: \"{'string': 'true'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_firewall_log_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_firewall_log_enable" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_firewall_log_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_firewall_log_enable failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -1642,7 +1916,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_firewall_log_enable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_firewall_log_enable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_firewall_log_enable -dict-add finding -bool NO
 fi
     
@@ -1654,7 +1928,6 @@ fi
 # * SI-7(1), SI-7(15)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_gatekeeper_enable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/sbin/spctl --status | /usr/bin/grep -c "assessments enabled"
 )
@@ -1672,20 +1945,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_gatekeeper_enable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_gatekeeper_enable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) os_gatekeeper_enable passed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_gatekeeper_enable passed (Result: $result_value, Expected: \"{'integer': 1}\")"
         /usr/bin/defaults write "$audit_plist" os_gatekeeper_enable -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_gatekeeper_enable" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_gatekeeper_enable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_gatekeeper_enable passed (Result: $result_value, Expected: "{'integer': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_gatekeeper_enable failed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_gatekeeper_enable failed (Result: $result_value, Expected: \"{'integer': 1}\")"
             /usr/bin/defaults write "$audit_plist" os_gatekeeper_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_gatekeeper_enable" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_gatekeeper_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_gatekeeper_enable failed (Result: $result_value, Expected: "{'integer': 1}")"
         else
-            echo "$(date -u) os_gatekeeper_enable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_gatekeeper_enable failed (Result: $result_value, Expected: \"{'integer': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_gatekeeper_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_gatekeeper_enable" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_gatekeeper_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_gatekeeper_enable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -1693,7 +1976,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_gatekeeper_enable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_gatekeeper_enable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_gatekeeper_enable -dict-add finding -bool NO
 fi
     
@@ -1702,7 +1985,6 @@ fi
 # * N/A
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_guest_folder_removed ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/bin/ls /Users/ | /usr/bin/grep -c "Guest"
 )
@@ -1720,20 +2002,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_guest_folder_removed'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_guest_folder_removed" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "0" ]]; then
-        echo "$(date -u) os_guest_folder_removed passed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_guest_folder_removed passed (Result: $result_value, Expected: \"{'integer': 0}\")"
         /usr/bin/defaults write "$audit_plist" os_guest_folder_removed -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_guest_folder_removed" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_guest_folder_removed -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_guest_folder_removed passed (Result: $result_value, Expected: "{'integer': 0}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_guest_folder_removed failed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_guest_folder_removed failed (Result: $result_value, Expected: \"{'integer': 0}\")"
             /usr/bin/defaults write "$audit_plist" os_guest_folder_removed -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_guest_folder_removed" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_guest_folder_removed -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_guest_folder_removed failed (Result: $result_value, Expected: "{'integer': 0}")"
         else
-            echo "$(date -u) os_guest_folder_removed failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_guest_folder_removed failed (Result: $result_value, Expected: \"{'integer': 0}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_guest_folder_removed -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_guest_folder_removed" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_guest_folder_removed -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_guest_folder_removed failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -1741,7 +2033,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_guest_folder_removed does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_guest_folder_removed does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_guest_folder_removed -dict-add finding -bool NO
 fi
     
@@ -1750,7 +2042,6 @@ fi
 # * N/A
 rule_arch="arm64"
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_hibernate_mode_apple_silicon_enable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(error_count=0
 if /usr/sbin/ioreg -rd1 -c IOPlatformExpertDevice 2>&1 | /usr/bin/grep -q "MacBook"; then
@@ -1784,20 +2075,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_hibernate_mode_apple_silicon_enable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_hibernate_mode_apple_silicon_enable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "0" ]]; then
-        echo "$(date -u) os_hibernate_mode_apple_silicon_enable passed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_hibernate_mode_apple_silicon_enable passed (Result: $result_value, Expected: \"{'integer': 0}\")"
         /usr/bin/defaults write "$audit_plist" os_hibernate_mode_apple_silicon_enable -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_hibernate_mode_apple_silicon_enable" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_hibernate_mode_apple_silicon_enable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_hibernate_mode_apple_silicon_enable passed (Result: $result_value, Expected: "{'integer': 0}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_hibernate_mode_apple_silicon_enable failed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_hibernate_mode_apple_silicon_enable failed (Result: $result_value, Expected: \"{'integer': 0}\")"
             /usr/bin/defaults write "$audit_plist" os_hibernate_mode_apple_silicon_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_hibernate_mode_apple_silicon_enable" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_hibernate_mode_apple_silicon_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_hibernate_mode_apple_silicon_enable failed (Result: $result_value, Expected: "{'integer': 0}")"
         else
-            echo "$(date -u) os_hibernate_mode_apple_silicon_enable failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_hibernate_mode_apple_silicon_enable failed (Result: $result_value, Expected: \"{'integer': 0}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_hibernate_mode_apple_silicon_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_hibernate_mode_apple_silicon_enable" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_hibernate_mode_apple_silicon_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_hibernate_mode_apple_silicon_enable failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -1805,7 +2106,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_hibernate_mode_apple_silicon_enable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_hibernate_mode_apple_silicon_enable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_hibernate_mode_apple_silicon_enable -dict-add finding -bool NO
 fi
     
@@ -1814,7 +2115,6 @@ fi
 # * N/A
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_hibernate_mode_destroyfvkeyonstandby_enable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/osascript -l JavaScript << EOS
 $.NSUserDefaults.alloc.initWithSuiteName('com.apple.MCX')\
@@ -1835,20 +2135,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_hibernate_mode_destroyfvkeyonstandby_enable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_hibernate_mode_destroyfvkeyonstandby_enable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "true" ]]; then
-        echo "$(date -u) os_hibernate_mode_destroyfvkeyonstandby_enable passed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_hibernate_mode_destroyfvkeyonstandby_enable passed (Result: $result_value, Expected: \"{'string': 'true'}\")"
         /usr/bin/defaults write "$audit_plist" os_hibernate_mode_destroyfvkeyonstandby_enable -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_hibernate_mode_destroyfvkeyonstandby_enable" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_hibernate_mode_destroyfvkeyonstandby_enable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_hibernate_mode_destroyfvkeyonstandby_enable passed (Result: $result_value, Expected: "{'string': 'true'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_hibernate_mode_destroyfvkeyonstandby_enable failed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_hibernate_mode_destroyfvkeyonstandby_enable failed (Result: $result_value, Expected: \"{'string': 'true'}\")"
             /usr/bin/defaults write "$audit_plist" os_hibernate_mode_destroyfvkeyonstandby_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_hibernate_mode_destroyfvkeyonstandby_enable" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_hibernate_mode_destroyfvkeyonstandby_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_hibernate_mode_destroyfvkeyonstandby_enable failed (Result: $result_value, Expected: "{'string': 'true'}")"
         else
-            echo "$(date -u) os_hibernate_mode_destroyfvkeyonstandby_enable failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_hibernate_mode_destroyfvkeyonstandby_enable failed (Result: $result_value, Expected: \"{'string': 'true'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_hibernate_mode_destroyfvkeyonstandby_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_hibernate_mode_destroyfvkeyonstandby_enable" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_hibernate_mode_destroyfvkeyonstandby_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_hibernate_mode_destroyfvkeyonstandby_enable failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -1856,7 +2166,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_hibernate_mode_destroyfvkeyonstandby_enable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_hibernate_mode_destroyfvkeyonstandby_enable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_hibernate_mode_destroyfvkeyonstandby_enable -dict-add finding -bool NO
 fi
     
@@ -1865,7 +2175,6 @@ fi
 # * N/A
 rule_arch="i386"
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_hibernate_mode_intel_enable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(error_count=0
 if /usr/sbin/ioreg -rd1 -c IOPlatformExpertDevice 2>&1 | /usr/bin/grep -q "MacBook"; then
@@ -1903,20 +2212,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_hibernate_mode_intel_enable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_hibernate_mode_intel_enable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "0" ]]; then
-        echo "$(date -u) os_hibernate_mode_intel_enable passed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_hibernate_mode_intel_enable passed (Result: $result_value, Expected: \"{'integer': 0}\")"
         /usr/bin/defaults write "$audit_plist" os_hibernate_mode_intel_enable -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_hibernate_mode_intel_enable" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_hibernate_mode_intel_enable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_hibernate_mode_intel_enable passed (Result: $result_value, Expected: "{'integer': 0}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_hibernate_mode_intel_enable failed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_hibernate_mode_intel_enable failed (Result: $result_value, Expected: \"{'integer': 0}\")"
             /usr/bin/defaults write "$audit_plist" os_hibernate_mode_intel_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_hibernate_mode_intel_enable" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_hibernate_mode_intel_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_hibernate_mode_intel_enable failed (Result: $result_value, Expected: "{'integer': 0}")"
         else
-            echo "$(date -u) os_hibernate_mode_intel_enable failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_hibernate_mode_intel_enable failed (Result: $result_value, Expected: \"{'integer': 0}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_hibernate_mode_intel_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_hibernate_mode_intel_enable" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_hibernate_mode_intel_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_hibernate_mode_intel_enable failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -1924,7 +2243,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_hibernate_mode_intel_enable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_hibernate_mode_intel_enable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_hibernate_mode_intel_enable -dict-add finding -bool NO
 fi
     
@@ -1933,7 +2252,6 @@ fi
 # * AC-6
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_home_folders_secure ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/find /System/Volumes/Data/Users -mindepth 1 -maxdepth 1 -type d ! \( -perm 700 -o -perm 711 \) | /usr/bin/grep -v "Shared" | /usr/bin/grep -v "Guest" | /usr/bin/wc -l | /usr/bin/xargs
 )
@@ -1951,20 +2269,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_home_folders_secure'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_home_folders_secure" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "0" ]]; then
-        echo "$(date -u) os_home_folders_secure passed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_home_folders_secure passed (Result: $result_value, Expected: \"{'integer': 0}\")"
         /usr/bin/defaults write "$audit_plist" os_home_folders_secure -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_home_folders_secure" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_home_folders_secure -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_home_folders_secure passed (Result: $result_value, Expected: "{'integer': 0}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_home_folders_secure failed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_home_folders_secure failed (Result: $result_value, Expected: \"{'integer': 0}\")"
             /usr/bin/defaults write "$audit_plist" os_home_folders_secure -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_home_folders_secure" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_home_folders_secure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_home_folders_secure failed (Result: $result_value, Expected: "{'integer': 0}")"
         else
-            echo "$(date -u) os_home_folders_secure failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_home_folders_secure failed (Result: $result_value, Expected: \"{'integer': 0}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_home_folders_secure -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_home_folders_secure" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_home_folders_secure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_home_folders_secure failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -1972,7 +2300,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_home_folders_secure does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_home_folders_secure does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_home_folders_secure -dict-add finding -bool NO
 fi
     
@@ -1982,7 +2310,6 @@ fi
 # * AC-3
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_httpd_disable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/bin/launchctl print-disabled system | /usr/bin/grep -c '"org.apache.httpd" => disabled'
 )
@@ -2000,20 +2327,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_httpd_disable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_httpd_disable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) os_httpd_disable passed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_httpd_disable passed (Result: $result_value, Expected: \"{'integer': 1}\")"
         /usr/bin/defaults write "$audit_plist" os_httpd_disable -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_httpd_disable" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_httpd_disable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_httpd_disable passed (Result: $result_value, Expected: "{'integer': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_httpd_disable failed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_httpd_disable failed (Result: $result_value, Expected: \"{'integer': 1}\")"
             /usr/bin/defaults write "$audit_plist" os_httpd_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_httpd_disable" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_httpd_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_httpd_disable failed (Result: $result_value, Expected: "{'integer': 1}")"
         else
-            echo "$(date -u) os_httpd_disable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_httpd_disable failed (Result: $result_value, Expected: \"{'integer': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_httpd_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_httpd_disable" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_httpd_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_httpd_disable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -2021,7 +2358,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_httpd_disable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_httpd_disable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_httpd_disable -dict-add finding -bool NO
 fi
     
@@ -2031,7 +2368,6 @@ fi
 # * AU-4
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_install_log_retention_configure ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/sbin/aslmanager -dd 2>&1 | /usr/bin/awk '/\/var\/log\/install.log/ {count++} /Processing module com.apple.install/,/Finished/ { for (i=1;i<=NR;i++) { if ($i == "TTL" && $(i+2) >= 365) { ttl="True" }; if ($i == "MAX") {max="True"}}} END{if (count > 1) { print "Multiple config files for /var/log/install, manually remove"} else if (ttl != "True") { print "TTL not configured" } else if (max == "True") { print "Max Size is configured, must be removed" } else { print "Yes" }}'
 )
@@ -2049,20 +2385,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_install_log_retention_configure'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_install_log_retention_configure" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "Yes" ]]; then
-        echo "$(date -u) os_install_log_retention_configure passed (Result: $result_value, Expected: "{'string': 'yes'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_install_log_retention_configure passed (Result: $result_value, Expected: \"{'string': 'yes'}\")"
         /usr/bin/defaults write "$audit_plist" os_install_log_retention_configure -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_install_log_retention_configure" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_install_log_retention_configure -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_install_log_retention_configure passed (Result: $result_value, Expected: "{'string': 'yes'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_install_log_retention_configure failed (Result: $result_value, Expected: "{'string': 'yes'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_install_log_retention_configure failed (Result: $result_value, Expected: \"{'string': 'yes'}\")"
             /usr/bin/defaults write "$audit_plist" os_install_log_retention_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_install_log_retention_configure" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_install_log_retention_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_install_log_retention_configure failed (Result: $result_value, Expected: "{'string': 'yes'}")"
         else
-            echo "$(date -u) os_install_log_retention_configure failed (Result: $result_value, Expected: "{'string': 'yes'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_install_log_retention_configure failed (Result: $result_value, Expected: \"{'string': 'yes'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_install_log_retention_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_install_log_retention_configure" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_install_log_retention_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_install_log_retention_configure failed (Result: $result_value, Expected: "{'string': 'yes'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -2070,7 +2416,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_install_log_retention_configure does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_install_log_retention_configure does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_install_log_retention_configure -dict-add finding -bool NO
 fi
     
@@ -2080,7 +2426,6 @@ fi
 # * CM-6
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_mdm_require ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/profiles status -type enrollment | /usr/bin/awk -F: '/MDM enrollment/ {print $2}' | /usr/bin/grep -c "Yes (User Approved)"
 )
@@ -2098,20 +2443,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_mdm_require'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_mdm_require" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) os_mdm_require passed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_mdm_require passed (Result: $result_value, Expected: \"{'integer': 1}\")"
         /usr/bin/defaults write "$audit_plist" os_mdm_require -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_mdm_require" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_mdm_require -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_mdm_require passed (Result: $result_value, Expected: "{'integer': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_mdm_require failed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_mdm_require failed (Result: $result_value, Expected: \"{'integer': 1}\")"
             /usr/bin/defaults write "$audit_plist" os_mdm_require -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_mdm_require" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_mdm_require -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_mdm_require failed (Result: $result_value, Expected: "{'integer': 1}")"
         else
-            echo "$(date -u) os_mdm_require failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_mdm_require failed (Result: $result_value, Expected: \"{'integer': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_mdm_require -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_mdm_require" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_mdm_require -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_mdm_require failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -2119,7 +2474,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_mdm_require does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_mdm_require does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_mdm_require -dict-add finding -bool NO
 fi
     
@@ -2128,7 +2483,6 @@ fi
 # * N/A
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_mobile_file_integrity_enable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/sbin/nvram -p | /usr/bin/grep -c "amfi_get_out_of_my_way=1"
 )
@@ -2146,20 +2500,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_mobile_file_integrity_enable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_mobile_file_integrity_enable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "0" ]]; then
-        echo "$(date -u) os_mobile_file_integrity_enable passed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_mobile_file_integrity_enable passed (Result: $result_value, Expected: \"{'integer': 0}\")"
         /usr/bin/defaults write "$audit_plist" os_mobile_file_integrity_enable -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_mobile_file_integrity_enable" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_mobile_file_integrity_enable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_mobile_file_integrity_enable passed (Result: $result_value, Expected: "{'integer': 0}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_mobile_file_integrity_enable failed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_mobile_file_integrity_enable failed (Result: $result_value, Expected: \"{'integer': 0}\")"
             /usr/bin/defaults write "$audit_plist" os_mobile_file_integrity_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_mobile_file_integrity_enable" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_mobile_file_integrity_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_mobile_file_integrity_enable failed (Result: $result_value, Expected: "{'integer': 0}")"
         else
-            echo "$(date -u) os_mobile_file_integrity_enable failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_mobile_file_integrity_enable failed (Result: $result_value, Expected: \"{'integer': 0}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_mobile_file_integrity_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_mobile_file_integrity_enable" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_mobile_file_integrity_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_mobile_file_integrity_enable failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -2167,7 +2531,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_mobile_file_integrity_enable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_mobile_file_integrity_enable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_mobile_file_integrity_enable -dict-add finding -bool NO
 fi
     
@@ -2177,7 +2541,6 @@ fi
 # * AC-3
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_nfsd_disable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/bin/launchctl print-disabled system | /usr/bin/grep -c '"com.apple.nfsd" => disabled'
 )
@@ -2195,20 +2558,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_nfsd_disable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_nfsd_disable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) os_nfsd_disable passed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_nfsd_disable passed (Result: $result_value, Expected: \"{'integer': 1}\")"
         /usr/bin/defaults write "$audit_plist" os_nfsd_disable -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_nfsd_disable" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_nfsd_disable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_nfsd_disable passed (Result: $result_value, Expected: "{'integer': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_nfsd_disable failed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_nfsd_disable failed (Result: $result_value, Expected: \"{'integer': 1}\")"
             /usr/bin/defaults write "$audit_plist" os_nfsd_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_nfsd_disable" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_nfsd_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_nfsd_disable failed (Result: $result_value, Expected: "{'integer': 1}")"
         else
-            echo "$(date -u) os_nfsd_disable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_nfsd_disable failed (Result: $result_value, Expected: \"{'integer': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_nfsd_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_nfsd_disable" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_nfsd_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_nfsd_disable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -2216,7 +2589,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_nfsd_disable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_nfsd_disable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_nfsd_disable -dict-add finding -bool NO
 fi
     
@@ -2227,7 +2600,6 @@ fi
 # * SC-7(10)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_on_device_dictation_enforce ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/osascript -l JavaScript << EOS
 $.NSUserDefaults.alloc.initWithSuiteName('com.apple.applicationaccess')\
@@ -2248,20 +2620,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_on_device_dictation_enforce'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_on_device_dictation_enforce" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "true" ]]; then
-        echo "$(date -u) os_on_device_dictation_enforce passed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_on_device_dictation_enforce passed (Result: $result_value, Expected: \"{'string': 'true'}\")"
         /usr/bin/defaults write "$audit_plist" os_on_device_dictation_enforce -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_on_device_dictation_enforce" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_on_device_dictation_enforce -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_on_device_dictation_enforce passed (Result: $result_value, Expected: "{'string': 'true'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_on_device_dictation_enforce failed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_on_device_dictation_enforce failed (Result: $result_value, Expected: \"{'string': 'true'}\")"
             /usr/bin/defaults write "$audit_plist" os_on_device_dictation_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_on_device_dictation_enforce" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_on_device_dictation_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_on_device_dictation_enforce failed (Result: $result_value, Expected: "{'string': 'true'}")"
         else
-            echo "$(date -u) os_on_device_dictation_enforce failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_on_device_dictation_enforce failed (Result: $result_value, Expected: \"{'string': 'true'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_on_device_dictation_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_on_device_dictation_enforce" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_on_device_dictation_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_on_device_dictation_enforce failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -2269,7 +2651,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_on_device_dictation_enforce does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_on_device_dictation_enforce does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_on_device_dictation_enforce -dict-add finding -bool NO
 fi
     
@@ -2278,7 +2660,6 @@ fi
 # * IA-6
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_password_hint_remove ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/dscl . -list /Users hint | /usr/bin/awk '{print $2}' | /usr/bin/wc -l | /usr/bin/xargs
 )
@@ -2296,20 +2677,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_password_hint_remove'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_password_hint_remove" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "0" ]]; then
-        echo "$(date -u) os_password_hint_remove passed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_password_hint_remove passed (Result: $result_value, Expected: \"{'integer': 0}\")"
         /usr/bin/defaults write "$audit_plist" os_password_hint_remove -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_password_hint_remove" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_password_hint_remove -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_password_hint_remove passed (Result: $result_value, Expected: "{'integer': 0}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_password_hint_remove failed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_password_hint_remove failed (Result: $result_value, Expected: \"{'integer': 0}\")"
             /usr/bin/defaults write "$audit_plist" os_password_hint_remove -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_password_hint_remove" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_password_hint_remove -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_password_hint_remove failed (Result: $result_value, Expected: "{'integer': 0}")"
         else
-            echo "$(date -u) os_password_hint_remove failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_password_hint_remove failed (Result: $result_value, Expected: \"{'integer': 0}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_password_hint_remove -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_password_hint_remove" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_password_hint_remove -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_password_hint_remove failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -2317,7 +2708,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_password_hint_remove does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_password_hint_remove does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_password_hint_remove -dict-add finding -bool NO
 fi
     
@@ -2326,7 +2717,6 @@ fi
 # * AC-8
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_policy_banner_loginwindow_enforce ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/bin/ls -ld /Library/Security/PolicyBanner.rtf* | /usr/bin/wc -l | /usr/bin/tr -d ' '
 )
@@ -2344,20 +2734,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_policy_banner_loginwindow_enforce'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_policy_banner_loginwindow_enforce" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) os_policy_banner_loginwindow_enforce passed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_policy_banner_loginwindow_enforce passed (Result: $result_value, Expected: \"{'integer': 1}\")"
         /usr/bin/defaults write "$audit_plist" os_policy_banner_loginwindow_enforce -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_policy_banner_loginwindow_enforce" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_policy_banner_loginwindow_enforce -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_policy_banner_loginwindow_enforce passed (Result: $result_value, Expected: "{'integer': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_policy_banner_loginwindow_enforce failed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_policy_banner_loginwindow_enforce failed (Result: $result_value, Expected: \"{'integer': 1}\")"
             /usr/bin/defaults write "$audit_plist" os_policy_banner_loginwindow_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_policy_banner_loginwindow_enforce" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_policy_banner_loginwindow_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_policy_banner_loginwindow_enforce failed (Result: $result_value, Expected: "{'integer': 1}")"
         else
-            echo "$(date -u) os_policy_banner_loginwindow_enforce failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_policy_banner_loginwindow_enforce failed (Result: $result_value, Expected: \"{'integer': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_policy_banner_loginwindow_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_policy_banner_loginwindow_enforce" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_policy_banner_loginwindow_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_policy_banner_loginwindow_enforce failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -2365,7 +2765,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_policy_banner_loginwindow_enforce does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_policy_banner_loginwindow_enforce does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_policy_banner_loginwindow_enforce -dict-add finding -bool NO
 fi
     
@@ -2374,7 +2774,6 @@ fi
 # * CM-7, CM-7(1)
 rule_arch="i386"
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_power_nap_disable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/pmset -g custom | /usr/bin/awk '/powernap/ { sum+=$2 } END {print sum}'
 )
@@ -2392,20 +2791,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_power_nap_disable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_power_nap_disable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "0" ]]; then
-        echo "$(date -u) os_power_nap_disable passed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_power_nap_disable passed (Result: $result_value, Expected: \"{'integer': 0}\")"
         /usr/bin/defaults write "$audit_plist" os_power_nap_disable -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_power_nap_disable" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_power_nap_disable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_power_nap_disable passed (Result: $result_value, Expected: "{'integer': 0}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_power_nap_disable failed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_power_nap_disable failed (Result: $result_value, Expected: \"{'integer': 0}\")"
             /usr/bin/defaults write "$audit_plist" os_power_nap_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_power_nap_disable" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_power_nap_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_power_nap_disable failed (Result: $result_value, Expected: "{'integer': 0}")"
         else
-            echo "$(date -u) os_power_nap_disable failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_power_nap_disable failed (Result: $result_value, Expected: \"{'integer': 0}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_power_nap_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_power_nap_disable" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_power_nap_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_power_nap_disable failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -2413,7 +2822,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_power_nap_disable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_power_nap_disable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_power_nap_disable -dict-add finding -bool NO
 fi
     
@@ -2422,7 +2831,6 @@ fi
 # * IA-2, IA-2(5)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_root_disable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/dscl . -read /Users/root UserShell 2>&1 | /usr/bin/grep -c "/usr/bin/false"
 )
@@ -2440,20 +2848,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_root_disable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_root_disable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) os_root_disable passed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_root_disable passed (Result: $result_value, Expected: \"{'integer': 1}\")"
         /usr/bin/defaults write "$audit_plist" os_root_disable -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_root_disable" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_root_disable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_root_disable passed (Result: $result_value, Expected: "{'integer': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_root_disable failed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_root_disable failed (Result: $result_value, Expected: \"{'integer': 1}\")"
             /usr/bin/defaults write "$audit_plist" os_root_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_root_disable" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_root_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_root_disable failed (Result: $result_value, Expected: "{'integer': 1}")"
         else
-            echo "$(date -u) os_root_disable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_root_disable failed (Result: $result_value, Expected: \"{'integer': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_root_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_root_disable" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_root_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_root_disable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -2461,7 +2879,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_root_disable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_root_disable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_root_disable -dict-add finding -bool NO
 fi
     
@@ -2470,7 +2888,6 @@ fi
 # * N/A
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_safari_advertising_privacy_protection_enable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/profiles -P -o stdout | /usr/bin/grep -c '"WebKitPreferences.privateClickMeasurementEnabled" = 1' | /usr/bin/awk '{ if ($1 >= 1) {print "1"} else {print "0"}}'
 )
@@ -2488,20 +2905,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_safari_advertising_privacy_protection_enable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_safari_advertising_privacy_protection_enable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) os_safari_advertising_privacy_protection_enable passed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_safari_advertising_privacy_protection_enable passed (Result: $result_value, Expected: \"{'integer': 1}\")"
         /usr/bin/defaults write "$audit_plist" os_safari_advertising_privacy_protection_enable -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_safari_advertising_privacy_protection_enable" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_safari_advertising_privacy_protection_enable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_safari_advertising_privacy_protection_enable passed (Result: $result_value, Expected: "{'integer': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_safari_advertising_privacy_protection_enable failed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_safari_advertising_privacy_protection_enable failed (Result: $result_value, Expected: \"{'integer': 1}\")"
             /usr/bin/defaults write "$audit_plist" os_safari_advertising_privacy_protection_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_safari_advertising_privacy_protection_enable" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_safari_advertising_privacy_protection_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_safari_advertising_privacy_protection_enable failed (Result: $result_value, Expected: "{'integer': 1}")"
         else
-            echo "$(date -u) os_safari_advertising_privacy_protection_enable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_safari_advertising_privacy_protection_enable failed (Result: $result_value, Expected: \"{'integer': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_safari_advertising_privacy_protection_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_safari_advertising_privacy_protection_enable" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_safari_advertising_privacy_protection_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_safari_advertising_privacy_protection_enable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -2509,56 +2936,8 @@ EOS
 
 
 else
-    echo "$(date -u) os_safari_advertising_privacy_protection_enable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_safari_advertising_privacy_protection_enable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_safari_advertising_privacy_protection_enable -dict-add finding -bool NO
-fi
-    
-#####----- Rule: os_safari_javascript_enabled -----#####
-## Addresses the following NIST 800-53 controls: 
-# * N/A
-rule_arch=""
-if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_safari_javascript_enabled ...' | tee -a "$audit_log"
-    unset result_value
-    result_value=$(/usr/bin/profiles -P -o stdout | /usr/bin/grep -c 'WebKitPreferences.javaScriptEnabled = 1' | /usr/bin/awk '{ if ($1 >= 1) {print "1"} else {print "0"}}'
-)
-    # expected result {'integer': 1}
-
-
-    # check to see if rule is exempt
-    unset exempt
-    unset exempt_reason
-
-    exempt=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
-ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_safari_javascript_enabled'))["exempt"]
-EOS
-)
-    exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
-ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_safari_javascript_enabled'))["exempt_reason"]
-EOS
-)
-
-    if [[ $result_value == "1" ]]; then
-        echo "$(date -u) os_safari_javascript_enabled passed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
-        /usr/bin/defaults write "$audit_plist" os_safari_javascript_enabled -dict-add finding -bool NO
-        /usr/bin/logger "mSCP: cis_lvl2 - os_safari_javascript_enabled passed (Result: $result_value, Expected: "{'integer': 1}")"
-    else
-        if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_safari_javascript_enabled failed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
-            /usr/bin/defaults write "$audit_plist" os_safari_javascript_enabled -dict-add finding -bool YES
-            /usr/bin/logger "mSCP: cis_lvl2 - os_safari_javascript_enabled failed (Result: $result_value, Expected: "{'integer': 1}")"
-        else
-            echo "$(date -u) os_safari_javascript_enabled failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
-            /usr/bin/defaults write "$audit_plist" os_safari_javascript_enabled -dict-add finding -bool YES
-            /usr/bin/logger "mSCP: cis_lvl2 - os_safari_javascript_enabled failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
-            /bin/sleep 1
-        fi
-    fi
-
-
-else
-    echo "$(date -u) os_safari_javascript_enabled does not apply to this architechture" | tee -a "$audit_log"
-    /usr/bin/defaults write "$audit_plist" os_safari_javascript_enabled -dict-add finding -bool NO
 fi
     
 #####----- Rule: os_safari_open_safe_downloads_disable -----#####
@@ -2566,7 +2945,6 @@ fi
 # * N/A
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_safari_open_safe_downloads_disable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/profiles -P -o stdout | /usr/bin/grep -c 'AutoOpenSafeDownloads = 0' | /usr/bin/awk '{ if ($1 >= 1) {print "1"} else {print "0"}}'
 )
@@ -2584,20 +2962,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_safari_open_safe_downloads_disable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_safari_open_safe_downloads_disable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) os_safari_open_safe_downloads_disable passed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_safari_open_safe_downloads_disable passed (Result: $result_value, Expected: \"{'integer': 1}\")"
         /usr/bin/defaults write "$audit_plist" os_safari_open_safe_downloads_disable -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_safari_open_safe_downloads_disable" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_safari_open_safe_downloads_disable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_safari_open_safe_downloads_disable passed (Result: $result_value, Expected: "{'integer': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_safari_open_safe_downloads_disable failed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_safari_open_safe_downloads_disable failed (Result: $result_value, Expected: \"{'integer': 1}\")"
             /usr/bin/defaults write "$audit_plist" os_safari_open_safe_downloads_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_safari_open_safe_downloads_disable" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_safari_open_safe_downloads_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_safari_open_safe_downloads_disable failed (Result: $result_value, Expected: "{'integer': 1}")"
         else
-            echo "$(date -u) os_safari_open_safe_downloads_disable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_safari_open_safe_downloads_disable failed (Result: $result_value, Expected: \"{'integer': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_safari_open_safe_downloads_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_safari_open_safe_downloads_disable" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_safari_open_safe_downloads_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_safari_open_safe_downloads_disable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -2605,7 +2993,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_safari_open_safe_downloads_disable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_safari_open_safe_downloads_disable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_safari_open_safe_downloads_disable -dict-add finding -bool NO
 fi
     
@@ -2614,7 +3002,6 @@ fi
 # * N/A
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_safari_popups_disabled ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/profiles -P -o stdout | /usr/bin/grep -c 'safariAllowPopups = 0' | /usr/bin/awk '{ if ($1 >= 1) {print "1"} else {print "0"}}'
 )
@@ -2632,20 +3019,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_safari_popups_disabled'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_safari_popups_disabled" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) os_safari_popups_disabled passed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_safari_popups_disabled passed (Result: $result_value, Expected: \"{'integer': 1}\")"
         /usr/bin/defaults write "$audit_plist" os_safari_popups_disabled -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_safari_popups_disabled" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_safari_popups_disabled -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_safari_popups_disabled passed (Result: $result_value, Expected: "{'integer': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_safari_popups_disabled failed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_safari_popups_disabled failed (Result: $result_value, Expected: \"{'integer': 1}\")"
             /usr/bin/defaults write "$audit_plist" os_safari_popups_disabled -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_safari_popups_disabled" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_safari_popups_disabled -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_safari_popups_disabled failed (Result: $result_value, Expected: "{'integer': 1}")"
         else
-            echo "$(date -u) os_safari_popups_disabled failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_safari_popups_disabled failed (Result: $result_value, Expected: \"{'integer': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_safari_popups_disabled -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_safari_popups_disabled" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_safari_popups_disabled -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_safari_popups_disabled failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -2653,7 +3050,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_safari_popups_disabled does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_safari_popups_disabled does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_safari_popups_disabled -dict-add finding -bool NO
 fi
     
@@ -2662,7 +3059,6 @@ fi
 # * N/A
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_safari_prevent_cross-site_tracking_enable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/profiles -P -o stdout | /usr/bin/grep -cE '"WebKitPreferences.storageBlockingPolicy" = 1|"WebKitStorageBlockingPolicy" = 1|"BlockStoragePolicy" =2' | /usr/bin/awk '{ if ($1 >= 1) {print "1"} else {print "0"}}'
 )
@@ -2680,20 +3076,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_safari_prevent_cross-site_tracking_enable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_safari_prevent_cross-site_tracking_enable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) os_safari_prevent_cross-site_tracking_enable passed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_safari_prevent_cross-site_tracking_enable passed (Result: $result_value, Expected: \"{'integer': 1}\")"
         /usr/bin/defaults write "$audit_plist" os_safari_prevent_cross-site_tracking_enable -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_safari_prevent_cross-site_tracking_enable" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_safari_prevent_cross-site_tracking_enable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_safari_prevent_cross-site_tracking_enable passed (Result: $result_value, Expected: "{'integer': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_safari_prevent_cross-site_tracking_enable failed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_safari_prevent_cross-site_tracking_enable failed (Result: $result_value, Expected: \"{'integer': 1}\")"
             /usr/bin/defaults write "$audit_plist" os_safari_prevent_cross-site_tracking_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_safari_prevent_cross-site_tracking_enable" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_safari_prevent_cross-site_tracking_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_safari_prevent_cross-site_tracking_enable failed (Result: $result_value, Expected: "{'integer': 1}")"
         else
-            echo "$(date -u) os_safari_prevent_cross-site_tracking_enable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_safari_prevent_cross-site_tracking_enable failed (Result: $result_value, Expected: \"{'integer': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_safari_prevent_cross-site_tracking_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_safari_prevent_cross-site_tracking_enable" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_safari_prevent_cross-site_tracking_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_safari_prevent_cross-site_tracking_enable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -2701,7 +3107,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_safari_prevent_cross-site_tracking_enable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_safari_prevent_cross-site_tracking_enable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_safari_prevent_cross-site_tracking_enable -dict-add finding -bool NO
 fi
     
@@ -2710,7 +3116,6 @@ fi
 # * N/A
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_safari_show_full_website_address_enable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/profiles -P -o stdout | /usr/bin/grep -c 'ShowFullURLInSmartSearchField = 1' | /usr/bin/awk '{ if ($1 >= 1) {print "1"} else {print "0"}}'
 )
@@ -2728,20 +3133,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_safari_show_full_website_address_enable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_safari_show_full_website_address_enable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) os_safari_show_full_website_address_enable passed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_safari_show_full_website_address_enable passed (Result: $result_value, Expected: \"{'integer': 1}\")"
         /usr/bin/defaults write "$audit_plist" os_safari_show_full_website_address_enable -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_safari_show_full_website_address_enable" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_safari_show_full_website_address_enable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_safari_show_full_website_address_enable passed (Result: $result_value, Expected: "{'integer': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_safari_show_full_website_address_enable failed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_safari_show_full_website_address_enable failed (Result: $result_value, Expected: \"{'integer': 1}\")"
             /usr/bin/defaults write "$audit_plist" os_safari_show_full_website_address_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_safari_show_full_website_address_enable" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_safari_show_full_website_address_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_safari_show_full_website_address_enable failed (Result: $result_value, Expected: "{'integer': 1}")"
         else
-            echo "$(date -u) os_safari_show_full_website_address_enable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_safari_show_full_website_address_enable failed (Result: $result_value, Expected: \"{'integer': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_safari_show_full_website_address_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_safari_show_full_website_address_enable" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_safari_show_full_website_address_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_safari_show_full_website_address_enable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -2749,7 +3164,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_safari_show_full_website_address_enable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_safari_show_full_website_address_enable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_safari_show_full_website_address_enable -dict-add finding -bool NO
 fi
     
@@ -2758,7 +3173,6 @@ fi
 # * N/A
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_safari_show_status_bar_enabled ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/profiles -P -o stdout | /usr/bin/grep -c 'ShowOverlayStatusBar = 1' | /usr/bin/awk '{ if ($1 >= 1) {print "1"} else {print "0"}}'
 )
@@ -2776,20 +3190,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_safari_show_status_bar_enabled'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_safari_show_status_bar_enabled" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) os_safari_show_status_bar_enabled passed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_safari_show_status_bar_enabled passed (Result: $result_value, Expected: \"{'integer': 1}\")"
         /usr/bin/defaults write "$audit_plist" os_safari_show_status_bar_enabled -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_safari_show_status_bar_enabled" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_safari_show_status_bar_enabled -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_safari_show_status_bar_enabled passed (Result: $result_value, Expected: "{'integer': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_safari_show_status_bar_enabled failed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_safari_show_status_bar_enabled failed (Result: $result_value, Expected: \"{'integer': 1}\")"
             /usr/bin/defaults write "$audit_plist" os_safari_show_status_bar_enabled -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_safari_show_status_bar_enabled" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_safari_show_status_bar_enabled -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_safari_show_status_bar_enabled failed (Result: $result_value, Expected: "{'integer': 1}")"
         else
-            echo "$(date -u) os_safari_show_status_bar_enabled failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_safari_show_status_bar_enabled failed (Result: $result_value, Expected: \"{'integer': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_safari_show_status_bar_enabled -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_safari_show_status_bar_enabled" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_safari_show_status_bar_enabled -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_safari_show_status_bar_enabled failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -2797,7 +3221,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_safari_show_status_bar_enabled does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_safari_show_status_bar_enabled does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_safari_show_status_bar_enabled -dict-add finding -bool NO
 fi
     
@@ -2806,7 +3230,6 @@ fi
 # * N/A
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_safari_warn_fraudulent_website_enable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/profiles -P -o stdout | /usr/bin/grep -c 'WarnAboutFraudulentWebsites = 1' | /usr/bin/awk '{ if ($1 >= 1) {print "1"} else {print "0"}}'
 )
@@ -2824,20 +3247,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_safari_warn_fraudulent_website_enable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_safari_warn_fraudulent_website_enable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) os_safari_warn_fraudulent_website_enable passed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_safari_warn_fraudulent_website_enable passed (Result: $result_value, Expected: \"{'integer': 1}\")"
         /usr/bin/defaults write "$audit_plist" os_safari_warn_fraudulent_website_enable -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_safari_warn_fraudulent_website_enable" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_safari_warn_fraudulent_website_enable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_safari_warn_fraudulent_website_enable passed (Result: $result_value, Expected: "{'integer': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_safari_warn_fraudulent_website_enable failed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_safari_warn_fraudulent_website_enable failed (Result: $result_value, Expected: \"{'integer': 1}\")"
             /usr/bin/defaults write "$audit_plist" os_safari_warn_fraudulent_website_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_safari_warn_fraudulent_website_enable" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_safari_warn_fraudulent_website_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_safari_warn_fraudulent_website_enable failed (Result: $result_value, Expected: "{'integer': 1}")"
         else
-            echo "$(date -u) os_safari_warn_fraudulent_website_enable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_safari_warn_fraudulent_website_enable failed (Result: $result_value, Expected: \"{'integer': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_safari_warn_fraudulent_website_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_safari_warn_fraudulent_website_enable" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_safari_warn_fraudulent_website_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_safari_warn_fraudulent_website_enable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -2845,7 +3278,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_safari_warn_fraudulent_website_enable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_safari_warn_fraudulent_website_enable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_safari_warn_fraudulent_website_enable -dict-add finding -bool NO
 fi
     
@@ -2854,7 +3287,6 @@ fi
 # * N/A
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_show_filename_extensions_enable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/sudo -u "$CURRENT_USER" /usr/bin/defaults read .GlobalPreferences AppleShowAllExtensions 2>/dev/null
 )
@@ -2872,20 +3304,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_show_filename_extensions_enable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_show_filename_extensions_enable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) os_show_filename_extensions_enable passed (Result: $result_value, Expected: "{'boolean': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_show_filename_extensions_enable passed (Result: $result_value, Expected: \"{'boolean': 1}\")"
         /usr/bin/defaults write "$audit_plist" os_show_filename_extensions_enable -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_show_filename_extensions_enable" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_show_filename_extensions_enable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_show_filename_extensions_enable passed (Result: $result_value, Expected: "{'boolean': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_show_filename_extensions_enable failed (Result: $result_value, Expected: "{'boolean': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_show_filename_extensions_enable failed (Result: $result_value, Expected: \"{'boolean': 1}\")"
             /usr/bin/defaults write "$audit_plist" os_show_filename_extensions_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_show_filename_extensions_enable" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_show_filename_extensions_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_show_filename_extensions_enable failed (Result: $result_value, Expected: "{'boolean': 1}")"
         else
-            echo "$(date -u) os_show_filename_extensions_enable failed (Result: $result_value, Expected: "{'boolean': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_show_filename_extensions_enable failed (Result: $result_value, Expected: \"{'boolean': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_show_filename_extensions_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_show_filename_extensions_enable" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_show_filename_extensions_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_show_filename_extensions_enable failed (Result: $result_value, Expected: "{'boolean': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -2893,7 +3335,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_show_filename_extensions_enable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_show_filename_extensions_enable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_show_filename_extensions_enable -dict-add finding -bool NO
 fi
     
@@ -2907,7 +3349,6 @@ fi
 # * SI-7
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_sip_enable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/csrutil status | /usr/bin/grep -c 'System Integrity Protection status: enabled.'
 )
@@ -2925,20 +3366,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_sip_enable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_sip_enable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) os_sip_enable passed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_sip_enable passed (Result: $result_value, Expected: \"{'integer': 1}\")"
         /usr/bin/defaults write "$audit_plist" os_sip_enable -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_sip_enable" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_sip_enable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_sip_enable passed (Result: $result_value, Expected: "{'integer': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_sip_enable failed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_sip_enable failed (Result: $result_value, Expected: \"{'integer': 1}\")"
             /usr/bin/defaults write "$audit_plist" os_sip_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_sip_enable" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_sip_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_sip_enable failed (Result: $result_value, Expected: "{'integer': 1}")"
         else
-            echo "$(date -u) os_sip_enable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_sip_enable failed (Result: $result_value, Expected: \"{'integer': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_sip_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_sip_enable" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_sip_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_sip_enable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -2946,7 +3397,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_sip_enable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_sip_enable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_sip_enable -dict-add finding -bool NO
 fi
     
@@ -2955,7 +3406,6 @@ fi
 # * N/A
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_software_update_deferral ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/osascript -l JavaScript << EOS
 function run() {
@@ -2983,20 +3433,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_software_update_deferral'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_software_update_deferral" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "true" ]]; then
-        echo "$(date -u) os_software_update_deferral passed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_software_update_deferral passed (Result: $result_value, Expected: \"{'string': 'true'}\")"
         /usr/bin/defaults write "$audit_plist" os_software_update_deferral -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_software_update_deferral" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_software_update_deferral -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_software_update_deferral passed (Result: $result_value, Expected: "{'string': 'true'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_software_update_deferral failed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_software_update_deferral failed (Result: $result_value, Expected: \"{'string': 'true'}\")"
             /usr/bin/defaults write "$audit_plist" os_software_update_deferral -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_software_update_deferral" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_software_update_deferral -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_software_update_deferral failed (Result: $result_value, Expected: "{'string': 'true'}")"
         else
-            echo "$(date -u) os_software_update_deferral failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_software_update_deferral failed (Result: $result_value, Expected: \"{'string': 'true'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_software_update_deferral -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_software_update_deferral" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_software_update_deferral -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_software_update_deferral failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -3004,7 +3464,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_software_update_deferral does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_software_update_deferral does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_software_update_deferral -dict-add finding -bool NO
 fi
     
@@ -3013,7 +3473,6 @@ fi
 # * N/A
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_sudo_timeout_configure ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/sudo /usr/bin/sudo -V | /usr/bin/grep -c "Authentication timestamp timeout: 0.0 minutes"
 )
@@ -3031,20 +3490,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_sudo_timeout_configure'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_sudo_timeout_configure" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) os_sudo_timeout_configure passed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_sudo_timeout_configure passed (Result: $result_value, Expected: \"{'integer': 1}\")"
         /usr/bin/defaults write "$audit_plist" os_sudo_timeout_configure -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_sudo_timeout_configure" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_sudo_timeout_configure -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_sudo_timeout_configure passed (Result: $result_value, Expected: "{'integer': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_sudo_timeout_configure failed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_sudo_timeout_configure failed (Result: $result_value, Expected: \"{'integer': 1}\")"
             /usr/bin/defaults write "$audit_plist" os_sudo_timeout_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_sudo_timeout_configure" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_sudo_timeout_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_sudo_timeout_configure failed (Result: $result_value, Expected: "{'integer': 1}")"
         else
-            echo "$(date -u) os_sudo_timeout_configure failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_sudo_timeout_configure failed (Result: $result_value, Expected: \"{'integer': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_sudo_timeout_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_sudo_timeout_configure" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_sudo_timeout_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_sudo_timeout_configure failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -3052,7 +3521,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_sudo_timeout_configure does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_sudo_timeout_configure does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_sudo_timeout_configure -dict-add finding -bool NO
 fi
     
@@ -3062,7 +3531,6 @@ fi
 # * IA-11
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_sudoers_timestamp_type_configure ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/sudo /usr/bin/sudo -V | /usr/bin/awk -F": " '/Type of authentication timestamp record/{print $2}'
 )
@@ -3080,20 +3548,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_sudoers_timestamp_type_configure'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_sudoers_timestamp_type_configure" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "tty" ]]; then
-        echo "$(date -u) os_sudoers_timestamp_type_configure passed (Result: $result_value, Expected: "{'string': 'tty'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_sudoers_timestamp_type_configure passed (Result: $result_value, Expected: \"{'string': 'tty'}\")"
         /usr/bin/defaults write "$audit_plist" os_sudoers_timestamp_type_configure -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_sudoers_timestamp_type_configure" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_sudoers_timestamp_type_configure -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_sudoers_timestamp_type_configure passed (Result: $result_value, Expected: "{'string': 'tty'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_sudoers_timestamp_type_configure failed (Result: $result_value, Expected: "{'string': 'tty'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_sudoers_timestamp_type_configure failed (Result: $result_value, Expected: \"{'string': 'tty'}\")"
             /usr/bin/defaults write "$audit_plist" os_sudoers_timestamp_type_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_sudoers_timestamp_type_configure" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_sudoers_timestamp_type_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_sudoers_timestamp_type_configure failed (Result: $result_value, Expected: "{'string': 'tty'}")"
         else
-            echo "$(date -u) os_sudoers_timestamp_type_configure failed (Result: $result_value, Expected: "{'string': 'tty'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_sudoers_timestamp_type_configure failed (Result: $result_value, Expected: \"{'string': 'tty'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_sudoers_timestamp_type_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_sudoers_timestamp_type_configure" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_sudoers_timestamp_type_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_sudoers_timestamp_type_configure failed (Result: $result_value, Expected: "{'string': 'tty'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -3101,7 +3579,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_sudoers_timestamp_type_configure does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_sudoers_timestamp_type_configure does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_sudoers_timestamp_type_configure -dict-add finding -bool NO
 fi
     
@@ -3110,7 +3588,6 @@ fi
 # * N/A
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_system_wide_applications_configure ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/find /Applications -iname "*\.app" -type d -perm -2 -ls | /usr/bin/wc -l | /usr/bin/xargs
 )
@@ -3128,20 +3605,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_system_wide_applications_configure'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_system_wide_applications_configure" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "0" ]]; then
-        echo "$(date -u) os_system_wide_applications_configure passed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_system_wide_applications_configure passed (Result: $result_value, Expected: \"{'integer': 0}\")"
         /usr/bin/defaults write "$audit_plist" os_system_wide_applications_configure -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_system_wide_applications_configure" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_system_wide_applications_configure -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_system_wide_applications_configure passed (Result: $result_value, Expected: "{'integer': 0}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_system_wide_applications_configure failed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_system_wide_applications_configure failed (Result: $result_value, Expected: \"{'integer': 0}\")"
             /usr/bin/defaults write "$audit_plist" os_system_wide_applications_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_system_wide_applications_configure" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_system_wide_applications_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_system_wide_applications_configure failed (Result: $result_value, Expected: "{'integer': 0}")"
         else
-            echo "$(date -u) os_system_wide_applications_configure failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_system_wide_applications_configure failed (Result: $result_value, Expected: \"{'integer': 0}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_system_wide_applications_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_system_wide_applications_configure" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_system_wide_applications_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_system_wide_applications_configure failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -3149,7 +3636,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_system_wide_applications_configure does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_system_wide_applications_configure does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_system_wide_applications_configure -dict-add finding -bool NO
 fi
     
@@ -3158,7 +3645,6 @@ fi
 # * N/A
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_terminal_secure_keyboard_enable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/osascript -l JavaScript << EOS
 $.NSUserDefaults.alloc.initWithSuiteName('com.apple.Terminal')\
@@ -3179,20 +3665,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_terminal_secure_keyboard_enable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_terminal_secure_keyboard_enable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "true" ]]; then
-        echo "$(date -u) os_terminal_secure_keyboard_enable passed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_terminal_secure_keyboard_enable passed (Result: $result_value, Expected: \"{'string': 'true'}\")"
         /usr/bin/defaults write "$audit_plist" os_terminal_secure_keyboard_enable -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_terminal_secure_keyboard_enable" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_terminal_secure_keyboard_enable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_terminal_secure_keyboard_enable passed (Result: $result_value, Expected: "{'string': 'true'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_terminal_secure_keyboard_enable failed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_terminal_secure_keyboard_enable failed (Result: $result_value, Expected: \"{'string': 'true'}\")"
             /usr/bin/defaults write "$audit_plist" os_terminal_secure_keyboard_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_terminal_secure_keyboard_enable" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_terminal_secure_keyboard_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_terminal_secure_keyboard_enable failed (Result: $result_value, Expected: "{'string': 'true'}")"
         else
-            echo "$(date -u) os_terminal_secure_keyboard_enable failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_terminal_secure_keyboard_enable failed (Result: $result_value, Expected: \"{'string': 'true'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_terminal_secure_keyboard_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_terminal_secure_keyboard_enable" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_terminal_secure_keyboard_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_terminal_secure_keyboard_enable failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -3200,7 +3696,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_terminal_secure_keyboard_enable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_terminal_secure_keyboard_enable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_terminal_secure_keyboard_enable -dict-add finding -bool NO
 fi
     
@@ -3209,7 +3705,6 @@ fi
 # * N/A
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_time_offset_limit_configure ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/sntp $(/usr/sbin/systemsetup -getnetworktimeserver | /usr/bin/awk '{print $4}') | /usr/bin/awk -F'.' '/\+\/\-/{if (substr($1,2) >= 270) {print "No"} else {print "Yes"}}'
 )
@@ -3227,20 +3722,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_time_offset_limit_configure'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_time_offset_limit_configure" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "Yes" ]]; then
-        echo "$(date -u) os_time_offset_limit_configure passed (Result: $result_value, Expected: "{'string': 'yes'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_time_offset_limit_configure passed (Result: $result_value, Expected: \"{'string': 'yes'}\")"
         /usr/bin/defaults write "$audit_plist" os_time_offset_limit_configure -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_time_offset_limit_configure" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_time_offset_limit_configure -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_time_offset_limit_configure passed (Result: $result_value, Expected: "{'string': 'yes'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_time_offset_limit_configure failed (Result: $result_value, Expected: "{'string': 'yes'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_time_offset_limit_configure failed (Result: $result_value, Expected: \"{'string': 'yes'}\")"
             /usr/bin/defaults write "$audit_plist" os_time_offset_limit_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_time_offset_limit_configure" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_time_offset_limit_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_time_offset_limit_configure failed (Result: $result_value, Expected: "{'string': 'yes'}")"
         else
-            echo "$(date -u) os_time_offset_limit_configure failed (Result: $result_value, Expected: "{'string': 'yes'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_time_offset_limit_configure failed (Result: $result_value, Expected: \"{'string': 'yes'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_time_offset_limit_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_time_offset_limit_configure" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_time_offset_limit_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_time_offset_limit_configure failed (Result: $result_value, Expected: "{'string': 'yes'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -3248,7 +3753,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_time_offset_limit_configure does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_time_offset_limit_configure does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_time_offset_limit_configure -dict-add finding -bool NO
 fi
     
@@ -3257,9 +3762,8 @@ fi
 # * IA-2, IA-2(5)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_unlock_active_user_session_disable ...' | tee -a "$audit_log"
     unset result_value
-    result_value=$(/usr/bin/security authorizationdb read system.login.screensaver 2>&1 | /usr/bin/grep -c 'use-login-window-ui'
+    result_value=$(/usr/bin/security authorizationdb read system.login.screensaver 2>&1 | /usr/bin/grep -c '<string>authenticate-session-owner</string>'
 )
     # expected result {'integer': 1}
 
@@ -3275,20 +3779,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_unlock_active_user_session_disable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_unlock_active_user_session_disable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) os_unlock_active_user_session_disable passed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_unlock_active_user_session_disable passed (Result: $result_value, Expected: \"{'integer': 1}\")"
         /usr/bin/defaults write "$audit_plist" os_unlock_active_user_session_disable -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_unlock_active_user_session_disable" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_unlock_active_user_session_disable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_unlock_active_user_session_disable passed (Result: $result_value, Expected: "{'integer': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_unlock_active_user_session_disable failed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_unlock_active_user_session_disable failed (Result: $result_value, Expected: \"{'integer': 1}\")"
             /usr/bin/defaults write "$audit_plist" os_unlock_active_user_session_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_unlock_active_user_session_disable" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_unlock_active_user_session_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_unlock_active_user_session_disable failed (Result: $result_value, Expected: "{'integer': 1}")"
         else
-            echo "$(date -u) os_unlock_active_user_session_disable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_unlock_active_user_session_disable failed (Result: $result_value, Expected: \"{'integer': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_unlock_active_user_session_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_unlock_active_user_session_disable" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_unlock_active_user_session_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_unlock_active_user_session_disable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -3296,7 +3810,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_unlock_active_user_session_disable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_unlock_active_user_session_disable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_unlock_active_user_session_disable -dict-add finding -bool NO
 fi
     
@@ -3305,7 +3819,6 @@ fi
 # * N/A
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_world_writable_library_folder_configure ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/find /System/Volumes/Data/Library -type d -perm -2 -ls | /usr/bin/grep -v Caches | /usr/bin/grep -v /Preferences/Audio/Data | /usr/bin/wc -l | /usr/bin/xargs
 )
@@ -3323,20 +3836,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_world_writable_library_folder_configure'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_world_writable_library_folder_configure" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "0" ]]; then
-        echo "$(date -u) os_world_writable_library_folder_configure passed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_world_writable_library_folder_configure passed (Result: $result_value, Expected: \"{'integer': 0}\")"
         /usr/bin/defaults write "$audit_plist" os_world_writable_library_folder_configure -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_world_writable_library_folder_configure" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_world_writable_library_folder_configure -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_world_writable_library_folder_configure passed (Result: $result_value, Expected: "{'integer': 0}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_world_writable_library_folder_configure failed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_world_writable_library_folder_configure failed (Result: $result_value, Expected: \"{'integer': 0}\")"
             /usr/bin/defaults write "$audit_plist" os_world_writable_library_folder_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_world_writable_library_folder_configure" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_world_writable_library_folder_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_world_writable_library_folder_configure failed (Result: $result_value, Expected: "{'integer': 0}")"
         else
-            echo "$(date -u) os_world_writable_library_folder_configure failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_world_writable_library_folder_configure failed (Result: $result_value, Expected: \"{'integer': 0}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_world_writable_library_folder_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_world_writable_library_folder_configure" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_world_writable_library_folder_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_world_writable_library_folder_configure failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -3344,7 +3867,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_world_writable_library_folder_configure does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_world_writable_library_folder_configure does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_world_writable_library_folder_configure -dict-add finding -bool NO
 fi
     
@@ -3353,7 +3876,6 @@ fi
 # * N/A
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: os_world_writable_system_folder_configure ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/find /System/Volumes/Data/System -type d -perm -2 -ls | /usr/bin/grep -v "downloadDir" | /usr/bin/wc -l | /usr/bin/xargs
 )
@@ -3371,20 +3893,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('os_world_writable_system_folder_configure'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "os_world_writable_system_folder_configure" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "0" ]]; then
-        echo "$(date -u) os_world_writable_system_folder_configure passed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "os_world_writable_system_folder_configure passed (Result: $result_value, Expected: \"{'integer': 0}\")"
         /usr/bin/defaults write "$audit_plist" os_world_writable_system_folder_configure -dict-add finding -bool NO
+        if [[ ! "$customref" == "os_world_writable_system_folder_configure" ]]; then
+            /usr/bin/defaults write "$audit_plist" os_world_writable_system_folder_configure -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - os_world_writable_system_folder_configure passed (Result: $result_value, Expected: "{'integer': 0}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) os_world_writable_system_folder_configure failed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_world_writable_system_folder_configure failed (Result: $result_value, Expected: \"{'integer': 0}\")"
             /usr/bin/defaults write "$audit_plist" os_world_writable_system_folder_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_world_writable_system_folder_configure" ]]; then
+                /usr/bin/defaults write "$audit_plist" os_world_writable_system_folder_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_world_writable_system_folder_configure failed (Result: $result_value, Expected: "{'integer': 0}")"
         else
-            echo "$(date -u) os_world_writable_system_folder_configure failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "os_world_writable_system_folder_configure failed (Result: $result_value, Expected: \"{'integer': 0}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" os_world_writable_system_folder_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "os_world_writable_system_folder_configure" ]]; then
+              /usr/bin/defaults write "$audit_plist" os_world_writable_system_folder_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - os_world_writable_system_folder_configure failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -3392,7 +3924,7 @@ EOS
 
 
 else
-    echo "$(date -u) os_world_writable_system_folder_configure does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "os_world_writable_system_folder_configure does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" os_world_writable_system_folder_configure -dict-add finding -bool NO
 fi
     
@@ -3401,7 +3933,6 @@ fi
 # * AC-7
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: pwpolicy_account_lockout_enforce ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/pwpolicy -getaccountpolicies 2> /dev/null | /usr/bin/tail +2 | /usr/bin/xmllint --xpath '//dict/key[text()="policyAttributeMaximumFailedAuthentications"]/following-sibling::integer[1]/text()' - | /usr/bin/awk '{ if ($1 <= 5) {print "yes"} else {print "no"}}'
 )
@@ -3419,20 +3950,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('pwpolicy_account_lockout_enforce'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "pwpolicy_account_lockout_enforce" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "yes" ]]; then
-        echo "$(date -u) pwpolicy_account_lockout_enforce passed (Result: $result_value, Expected: "{'string': 'yes'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "pwpolicy_account_lockout_enforce passed (Result: $result_value, Expected: \"{'string': 'yes'}\")"
         /usr/bin/defaults write "$audit_plist" pwpolicy_account_lockout_enforce -dict-add finding -bool NO
+        if [[ ! "$customref" == "pwpolicy_account_lockout_enforce" ]]; then
+            /usr/bin/defaults write "$audit_plist" pwpolicy_account_lockout_enforce -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - pwpolicy_account_lockout_enforce passed (Result: $result_value, Expected: "{'string': 'yes'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) pwpolicy_account_lockout_enforce failed (Result: $result_value, Expected: "{'string': 'yes'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "pwpolicy_account_lockout_enforce failed (Result: $result_value, Expected: \"{'string': 'yes'}\")"
             /usr/bin/defaults write "$audit_plist" pwpolicy_account_lockout_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "pwpolicy_account_lockout_enforce" ]]; then
+                /usr/bin/defaults write "$audit_plist" pwpolicy_account_lockout_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - pwpolicy_account_lockout_enforce failed (Result: $result_value, Expected: "{'string': 'yes'}")"
         else
-            echo "$(date -u) pwpolicy_account_lockout_enforce failed (Result: $result_value, Expected: "{'string': 'yes'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "pwpolicy_account_lockout_enforce failed (Result: $result_value, Expected: \"{'string': 'yes'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" pwpolicy_account_lockout_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "pwpolicy_account_lockout_enforce" ]]; then
+              /usr/bin/defaults write "$audit_plist" pwpolicy_account_lockout_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - pwpolicy_account_lockout_enforce failed (Result: $result_value, Expected: "{'string': 'yes'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -3440,7 +3981,7 @@ EOS
 
 
 else
-    echo "$(date -u) pwpolicy_account_lockout_enforce does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "pwpolicy_account_lockout_enforce does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" pwpolicy_account_lockout_enforce -dict-add finding -bool NO
 fi
     
@@ -3449,7 +3990,6 @@ fi
 # * AC-7
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: pwpolicy_account_lockout_timeout_enforce ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/pwpolicy -getaccountpolicies 2> /dev/null | /usr/bin/tail +2 | /usr/bin/xmllint --xpath '//dict/key[text()="autoEnableInSeconds"]/following-sibling::integer[1]/text()' - | /usr/bin/awk '{ if ($1/60 >= 15 ) {print "yes"} else {print "no"}}'
 )
@@ -3467,20 +4007,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('pwpolicy_account_lockout_timeout_enforce'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "pwpolicy_account_lockout_timeout_enforce" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "yes" ]]; then
-        echo "$(date -u) pwpolicy_account_lockout_timeout_enforce passed (Result: $result_value, Expected: "{'string': 'yes'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "pwpolicy_account_lockout_timeout_enforce passed (Result: $result_value, Expected: \"{'string': 'yes'}\")"
         /usr/bin/defaults write "$audit_plist" pwpolicy_account_lockout_timeout_enforce -dict-add finding -bool NO
+        if [[ ! "$customref" == "pwpolicy_account_lockout_timeout_enforce" ]]; then
+            /usr/bin/defaults write "$audit_plist" pwpolicy_account_lockout_timeout_enforce -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - pwpolicy_account_lockout_timeout_enforce passed (Result: $result_value, Expected: "{'string': 'yes'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) pwpolicy_account_lockout_timeout_enforce failed (Result: $result_value, Expected: "{'string': 'yes'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "pwpolicy_account_lockout_timeout_enforce failed (Result: $result_value, Expected: \"{'string': 'yes'}\")"
             /usr/bin/defaults write "$audit_plist" pwpolicy_account_lockout_timeout_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "pwpolicy_account_lockout_timeout_enforce" ]]; then
+                /usr/bin/defaults write "$audit_plist" pwpolicy_account_lockout_timeout_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - pwpolicy_account_lockout_timeout_enforce failed (Result: $result_value, Expected: "{'string': 'yes'}")"
         else
-            echo "$(date -u) pwpolicy_account_lockout_timeout_enforce failed (Result: $result_value, Expected: "{'string': 'yes'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "pwpolicy_account_lockout_timeout_enforce failed (Result: $result_value, Expected: \"{'string': 'yes'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" pwpolicy_account_lockout_timeout_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "pwpolicy_account_lockout_timeout_enforce" ]]; then
+              /usr/bin/defaults write "$audit_plist" pwpolicy_account_lockout_timeout_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - pwpolicy_account_lockout_timeout_enforce failed (Result: $result_value, Expected: "{'string': 'yes'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -3488,7 +4038,7 @@ EOS
 
 
 else
-    echo "$(date -u) pwpolicy_account_lockout_timeout_enforce does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "pwpolicy_account_lockout_timeout_enforce does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" pwpolicy_account_lockout_timeout_enforce -dict-add finding -bool NO
 fi
     
@@ -3497,7 +4047,6 @@ fi
 # * IA-5(1)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: pwpolicy_alpha_numeric_enforce ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/pwpolicy -getaccountpolicies 2> /dev/null | /usr/bin/tail +2 | /usr/bin/xmllint --xpath '//dict/key[text()="policyIdentifier"]/following-sibling::*[1]/text()' - | /usr/bin/grep "requireAlphanumeric" -c
 )
@@ -3515,20 +4064,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('pwpolicy_alpha_numeric_enforce'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "pwpolicy_alpha_numeric_enforce" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) pwpolicy_alpha_numeric_enforce passed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "pwpolicy_alpha_numeric_enforce passed (Result: $result_value, Expected: \"{'integer': 1}\")"
         /usr/bin/defaults write "$audit_plist" pwpolicy_alpha_numeric_enforce -dict-add finding -bool NO
+        if [[ ! "$customref" == "pwpolicy_alpha_numeric_enforce" ]]; then
+            /usr/bin/defaults write "$audit_plist" pwpolicy_alpha_numeric_enforce -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - pwpolicy_alpha_numeric_enforce passed (Result: $result_value, Expected: "{'integer': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) pwpolicy_alpha_numeric_enforce failed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "pwpolicy_alpha_numeric_enforce failed (Result: $result_value, Expected: \"{'integer': 1}\")"
             /usr/bin/defaults write "$audit_plist" pwpolicy_alpha_numeric_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "pwpolicy_alpha_numeric_enforce" ]]; then
+                /usr/bin/defaults write "$audit_plist" pwpolicy_alpha_numeric_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - pwpolicy_alpha_numeric_enforce failed (Result: $result_value, Expected: "{'integer': 1}")"
         else
-            echo "$(date -u) pwpolicy_alpha_numeric_enforce failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "pwpolicy_alpha_numeric_enforce failed (Result: $result_value, Expected: \"{'integer': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" pwpolicy_alpha_numeric_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "pwpolicy_alpha_numeric_enforce" ]]; then
+              /usr/bin/defaults write "$audit_plist" pwpolicy_alpha_numeric_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - pwpolicy_alpha_numeric_enforce failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -3536,7 +4095,7 @@ EOS
 
 
 else
-    echo "$(date -u) pwpolicy_alpha_numeric_enforce does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "pwpolicy_alpha_numeric_enforce does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" pwpolicy_alpha_numeric_enforce -dict-add finding -bool NO
 fi
     
@@ -3545,9 +4104,8 @@ fi
 # * IA-5(1)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: pwpolicy_custom_regex_enforce ...' | tee -a "$audit_log"
     unset result_value
-    result_value=$(/usr/bin/pwpolicy -getaccountpolicies 2> /dev/null | /usr/bin/tail +2 | /usr/bin/xmllint --xpath 'boolean(//*[contains(text(),"policyAttributePassword matches '\''.*[A-Z]{1,}[a-z]{1,}.*'\''")])'
+    result_value=$(/usr/bin/pwpolicy -getaccountpolicies 2> /dev/null | /usr/bin/tail +2 | /usr/bin/xmllint --xpath 'boolean(//*[contains(text(),"policyAttributePassword matches '\''.*[A-Z]{1,}[a-z]{1,}.*'\''")])' -
 )
     # expected result {'string': 'true'}
 
@@ -3563,20 +4121,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('pwpolicy_custom_regex_enforce'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "pwpolicy_custom_regex_enforce" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "true" ]]; then
-        echo "$(date -u) pwpolicy_custom_regex_enforce passed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "pwpolicy_custom_regex_enforce passed (Result: $result_value, Expected: \"{'string': 'true'}\")"
         /usr/bin/defaults write "$audit_plist" pwpolicy_custom_regex_enforce -dict-add finding -bool NO
+        if [[ ! "$customref" == "pwpolicy_custom_regex_enforce" ]]; then
+            /usr/bin/defaults write "$audit_plist" pwpolicy_custom_regex_enforce -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - pwpolicy_custom_regex_enforce passed (Result: $result_value, Expected: "{'string': 'true'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) pwpolicy_custom_regex_enforce failed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "pwpolicy_custom_regex_enforce failed (Result: $result_value, Expected: \"{'string': 'true'}\")"
             /usr/bin/defaults write "$audit_plist" pwpolicy_custom_regex_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "pwpolicy_custom_regex_enforce" ]]; then
+                /usr/bin/defaults write "$audit_plist" pwpolicy_custom_regex_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - pwpolicy_custom_regex_enforce failed (Result: $result_value, Expected: "{'string': 'true'}")"
         else
-            echo "$(date -u) pwpolicy_custom_regex_enforce failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "pwpolicy_custom_regex_enforce failed (Result: $result_value, Expected: \"{'string': 'true'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" pwpolicy_custom_regex_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "pwpolicy_custom_regex_enforce" ]]; then
+              /usr/bin/defaults write "$audit_plist" pwpolicy_custom_regex_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - pwpolicy_custom_regex_enforce failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -3584,7 +4152,7 @@ EOS
 
 
 else
-    echo "$(date -u) pwpolicy_custom_regex_enforce does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "pwpolicy_custom_regex_enforce does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" pwpolicy_custom_regex_enforce -dict-add finding -bool NO
 fi
     
@@ -3593,7 +4161,6 @@ fi
 # * IA-5(1)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: pwpolicy_history_enforce ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/pwpolicy -getaccountpolicies 2> /dev/null | /usr/bin/tail +2 | /usr/bin/xmllint --xpath '//dict/key[text()="policyAttributePasswordHistoryDepth"]/following-sibling::*[1]/text()' - | /usr/bin/awk '{ if ($1 >= 15 ) {print "yes"} else {print "no"}}'
 )
@@ -3611,20 +4178,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('pwpolicy_history_enforce'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "pwpolicy_history_enforce" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "yes" ]]; then
-        echo "$(date -u) pwpolicy_history_enforce passed (Result: $result_value, Expected: "{'string': 'yes'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "pwpolicy_history_enforce passed (Result: $result_value, Expected: \"{'string': 'yes'}\")"
         /usr/bin/defaults write "$audit_plist" pwpolicy_history_enforce -dict-add finding -bool NO
+        if [[ ! "$customref" == "pwpolicy_history_enforce" ]]; then
+            /usr/bin/defaults write "$audit_plist" pwpolicy_history_enforce -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - pwpolicy_history_enforce passed (Result: $result_value, Expected: "{'string': 'yes'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) pwpolicy_history_enforce failed (Result: $result_value, Expected: "{'string': 'yes'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "pwpolicy_history_enforce failed (Result: $result_value, Expected: \"{'string': 'yes'}\")"
             /usr/bin/defaults write "$audit_plist" pwpolicy_history_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "pwpolicy_history_enforce" ]]; then
+                /usr/bin/defaults write "$audit_plist" pwpolicy_history_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - pwpolicy_history_enforce failed (Result: $result_value, Expected: "{'string': 'yes'}")"
         else
-            echo "$(date -u) pwpolicy_history_enforce failed (Result: $result_value, Expected: "{'string': 'yes'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "pwpolicy_history_enforce failed (Result: $result_value, Expected: \"{'string': 'yes'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" pwpolicy_history_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "pwpolicy_history_enforce" ]]; then
+              /usr/bin/defaults write "$audit_plist" pwpolicy_history_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - pwpolicy_history_enforce failed (Result: $result_value, Expected: "{'string': 'yes'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -3632,7 +4209,7 @@ EOS
 
 
 else
-    echo "$(date -u) pwpolicy_history_enforce does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "pwpolicy_history_enforce does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" pwpolicy_history_enforce -dict-add finding -bool NO
 fi
     
@@ -3641,7 +4218,6 @@ fi
 # * IA-5
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: pwpolicy_max_lifetime_enforce ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/pwpolicy -getaccountpolicies 2> /dev/null | /usr/bin/tail +2 | /usr/bin/xmllint --xpath '//dict/key[text()="policyAttributeExpiresEveryNDays"]/following-sibling::*[1]/text()' -
 )
@@ -3659,20 +4235,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('pwpolicy_max_lifetime_enforce'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "pwpolicy_max_lifetime_enforce" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "365" ]]; then
-        echo "$(date -u) pwpolicy_max_lifetime_enforce passed (Result: $result_value, Expected: "{'integer': 365}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "pwpolicy_max_lifetime_enforce passed (Result: $result_value, Expected: \"{'integer': 365}\")"
         /usr/bin/defaults write "$audit_plist" pwpolicy_max_lifetime_enforce -dict-add finding -bool NO
+        if [[ ! "$customref" == "pwpolicy_max_lifetime_enforce" ]]; then
+            /usr/bin/defaults write "$audit_plist" pwpolicy_max_lifetime_enforce -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - pwpolicy_max_lifetime_enforce passed (Result: $result_value, Expected: "{'integer': 365}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) pwpolicy_max_lifetime_enforce failed (Result: $result_value, Expected: "{'integer': 365}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "pwpolicy_max_lifetime_enforce failed (Result: $result_value, Expected: \"{'integer': 365}\")"
             /usr/bin/defaults write "$audit_plist" pwpolicy_max_lifetime_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "pwpolicy_max_lifetime_enforce" ]]; then
+                /usr/bin/defaults write "$audit_plist" pwpolicy_max_lifetime_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - pwpolicy_max_lifetime_enforce failed (Result: $result_value, Expected: "{'integer': 365}")"
         else
-            echo "$(date -u) pwpolicy_max_lifetime_enforce failed (Result: $result_value, Expected: "{'integer': 365}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "pwpolicy_max_lifetime_enforce failed (Result: $result_value, Expected: \"{'integer': 365}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" pwpolicy_max_lifetime_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "pwpolicy_max_lifetime_enforce" ]]; then
+              /usr/bin/defaults write "$audit_plist" pwpolicy_max_lifetime_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - pwpolicy_max_lifetime_enforce failed (Result: $result_value, Expected: "{'integer': 365}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -3680,7 +4266,7 @@ EOS
 
 
 else
-    echo "$(date -u) pwpolicy_max_lifetime_enforce does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "pwpolicy_max_lifetime_enforce does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" pwpolicy_max_lifetime_enforce -dict-add finding -bool NO
 fi
     
@@ -3689,7 +4275,6 @@ fi
 # * IA-5(1)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: pwpolicy_minimum_length_enforce ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/pwpolicy -getaccountpolicies 2> /dev/null | /usr/bin/tail +2 | /usr/bin/xmllint --xpath 'boolean(//*[contains(text(),"policyAttributePassword matches '\''.{15,}'\''")])' -
 )
@@ -3707,20 +4292,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('pwpolicy_minimum_length_enforce'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "pwpolicy_minimum_length_enforce" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "true" ]]; then
-        echo "$(date -u) pwpolicy_minimum_length_enforce passed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "pwpolicy_minimum_length_enforce passed (Result: $result_value, Expected: \"{'string': 'true'}\")"
         /usr/bin/defaults write "$audit_plist" pwpolicy_minimum_length_enforce -dict-add finding -bool NO
+        if [[ ! "$customref" == "pwpolicy_minimum_length_enforce" ]]; then
+            /usr/bin/defaults write "$audit_plist" pwpolicy_minimum_length_enforce -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - pwpolicy_minimum_length_enforce passed (Result: $result_value, Expected: "{'string': 'true'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) pwpolicy_minimum_length_enforce failed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "pwpolicy_minimum_length_enforce failed (Result: $result_value, Expected: \"{'string': 'true'}\")"
             /usr/bin/defaults write "$audit_plist" pwpolicy_minimum_length_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "pwpolicy_minimum_length_enforce" ]]; then
+                /usr/bin/defaults write "$audit_plist" pwpolicy_minimum_length_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - pwpolicy_minimum_length_enforce failed (Result: $result_value, Expected: "{'string': 'true'}")"
         else
-            echo "$(date -u) pwpolicy_minimum_length_enforce failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "pwpolicy_minimum_length_enforce failed (Result: $result_value, Expected: \"{'string': 'true'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" pwpolicy_minimum_length_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "pwpolicy_minimum_length_enforce" ]]; then
+              /usr/bin/defaults write "$audit_plist" pwpolicy_minimum_length_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - pwpolicy_minimum_length_enforce failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -3728,7 +4323,7 @@ EOS
 
 
 else
-    echo "$(date -u) pwpolicy_minimum_length_enforce does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "pwpolicy_minimum_length_enforce does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" pwpolicy_minimum_length_enforce -dict-add finding -bool NO
 fi
     
@@ -3737,7 +4332,6 @@ fi
 # * IA-5(1)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: pwpolicy_special_character_enforce ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/pwpolicy -getaccountpolicies 2> /dev/null | /usr/bin/tail +2 | /usr/bin/xmllint --xpath 'boolean(//*[contains(text(),"policyAttributePassword matches '\''(.*[^a-zA-Z0-9].*){1,}'\''")])' -
 )
@@ -3755,20 +4349,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('pwpolicy_special_character_enforce'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "pwpolicy_special_character_enforce" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "true" ]]; then
-        echo "$(date -u) pwpolicy_special_character_enforce passed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "pwpolicy_special_character_enforce passed (Result: $result_value, Expected: \"{'string': 'true'}\")"
         /usr/bin/defaults write "$audit_plist" pwpolicy_special_character_enforce -dict-add finding -bool NO
+        if [[ ! "$customref" == "pwpolicy_special_character_enforce" ]]; then
+            /usr/bin/defaults write "$audit_plist" pwpolicy_special_character_enforce -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - pwpolicy_special_character_enforce passed (Result: $result_value, Expected: "{'string': 'true'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) pwpolicy_special_character_enforce failed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "pwpolicy_special_character_enforce failed (Result: $result_value, Expected: \"{'string': 'true'}\")"
             /usr/bin/defaults write "$audit_plist" pwpolicy_special_character_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "pwpolicy_special_character_enforce" ]]; then
+                /usr/bin/defaults write "$audit_plist" pwpolicy_special_character_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - pwpolicy_special_character_enforce failed (Result: $result_value, Expected: "{'string': 'true'}")"
         else
-            echo "$(date -u) pwpolicy_special_character_enforce failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "pwpolicy_special_character_enforce failed (Result: $result_value, Expected: \"{'string': 'true'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" pwpolicy_special_character_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "pwpolicy_special_character_enforce" ]]; then
+              /usr/bin/defaults write "$audit_plist" pwpolicy_special_character_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - pwpolicy_special_character_enforce failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -3776,7 +4380,7 @@ EOS
 
 
 else
-    echo "$(date -u) pwpolicy_special_character_enforce does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "pwpolicy_special_character_enforce does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" pwpolicy_special_character_enforce -dict-add finding -bool NO
 fi
     
@@ -3785,7 +4389,6 @@ fi
 # * CM-7, CM-7(1)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_airplay_receiver_disable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/osascript -l JavaScript << EOS
 $.NSUserDefaults.alloc.initWithSuiteName('com.apple.applicationaccess')\
@@ -3806,20 +4409,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_airplay_receiver_disable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_airplay_receiver_disable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "false" ]]; then
-        echo "$(date -u) system_settings_airplay_receiver_disable passed (Result: $result_value, Expected: "{'string': 'false'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_airplay_receiver_disable passed (Result: $result_value, Expected: \"{'string': 'false'}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_airplay_receiver_disable -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_airplay_receiver_disable" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_airplay_receiver_disable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_airplay_receiver_disable passed (Result: $result_value, Expected: "{'string': 'false'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_airplay_receiver_disable failed (Result: $result_value, Expected: "{'string': 'false'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_airplay_receiver_disable failed (Result: $result_value, Expected: \"{'string': 'false'}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_airplay_receiver_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_airplay_receiver_disable" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_airplay_receiver_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_airplay_receiver_disable failed (Result: $result_value, Expected: "{'string': 'false'}")"
         else
-            echo "$(date -u) system_settings_airplay_receiver_disable failed (Result: $result_value, Expected: "{'string': 'false'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_airplay_receiver_disable failed (Result: $result_value, Expected: \"{'string': 'false'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_airplay_receiver_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_airplay_receiver_disable" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_airplay_receiver_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_airplay_receiver_disable failed (Result: $result_value, Expected: "{'string': 'false'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -3827,7 +4440,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_airplay_receiver_disable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_airplay_receiver_disable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_airplay_receiver_disable -dict-add finding -bool NO
 fi
     
@@ -3837,7 +4450,6 @@ fi
 # * IA-5(13)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_automatic_login_disable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/osascript -l JavaScript << EOS
 $.NSUserDefaults.alloc.initWithSuiteName('com.apple.loginwindow')\
@@ -3858,20 +4470,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_automatic_login_disable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_automatic_login_disable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "true" ]]; then
-        echo "$(date -u) system_settings_automatic_login_disable passed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_automatic_login_disable passed (Result: $result_value, Expected: \"{'string': 'true'}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_automatic_login_disable -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_automatic_login_disable" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_automatic_login_disable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_automatic_login_disable passed (Result: $result_value, Expected: "{'string': 'true'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_automatic_login_disable failed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_automatic_login_disable failed (Result: $result_value, Expected: \"{'string': 'true'}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_automatic_login_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_automatic_login_disable" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_automatic_login_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_automatic_login_disable failed (Result: $result_value, Expected: "{'string': 'true'}")"
         else
-            echo "$(date -u) system_settings_automatic_login_disable failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_automatic_login_disable failed (Result: $result_value, Expected: \"{'string': 'true'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_automatic_login_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_automatic_login_disable" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_automatic_login_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_automatic_login_disable failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -3879,7 +4501,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_automatic_login_disable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_automatic_login_disable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_automatic_login_disable -dict-add finding -bool NO
 fi
     
@@ -3888,7 +4510,6 @@ fi
 # * N/A
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_bluetooth_menu_enable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/osascript -l JavaScript << EOS
 $.NSUserDefaults.alloc.initWithSuiteName('com.apple.controlcenter')\
@@ -3909,20 +4530,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_bluetooth_menu_enable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_bluetooth_menu_enable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "18" ]]; then
-        echo "$(date -u) system_settings_bluetooth_menu_enable passed (Result: $result_value, Expected: "{'integer': 18}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_bluetooth_menu_enable passed (Result: $result_value, Expected: \"{'integer': 18}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_bluetooth_menu_enable -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_bluetooth_menu_enable" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_bluetooth_menu_enable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_bluetooth_menu_enable passed (Result: $result_value, Expected: "{'integer': 18}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_bluetooth_menu_enable failed (Result: $result_value, Expected: "{'integer': 18}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_bluetooth_menu_enable failed (Result: $result_value, Expected: \"{'integer': 18}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_bluetooth_menu_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_bluetooth_menu_enable" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_bluetooth_menu_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_bluetooth_menu_enable failed (Result: $result_value, Expected: "{'integer': 18}")"
         else
-            echo "$(date -u) system_settings_bluetooth_menu_enable failed (Result: $result_value, Expected: "{'integer': 18}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_bluetooth_menu_enable failed (Result: $result_value, Expected: \"{'integer': 18}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_bluetooth_menu_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_bluetooth_menu_enable" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_bluetooth_menu_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_bluetooth_menu_enable failed (Result: $result_value, Expected: "{'integer': 18}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -3930,7 +4561,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_bluetooth_menu_enable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_bluetooth_menu_enable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_bluetooth_menu_enable -dict-add finding -bool NO
 fi
     
@@ -3941,7 +4572,6 @@ fi
 # * CM-7, CM-7(1)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_bluetooth_sharing_disable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/sudo -u "$CURRENT_USER" /usr/bin/defaults -currentHost read com.apple.Bluetooth PrefKeyServicesEnabled
 )
@@ -3959,20 +4589,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_bluetooth_sharing_disable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_bluetooth_sharing_disable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "0" ]]; then
-        echo "$(date -u) system_settings_bluetooth_sharing_disable passed (Result: $result_value, Expected: "{'boolean': 0}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_bluetooth_sharing_disable passed (Result: $result_value, Expected: \"{'boolean': 0}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_bluetooth_sharing_disable -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_bluetooth_sharing_disable" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_bluetooth_sharing_disable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_bluetooth_sharing_disable passed (Result: $result_value, Expected: "{'boolean': 0}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_bluetooth_sharing_disable failed (Result: $result_value, Expected: "{'boolean': 0}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_bluetooth_sharing_disable failed (Result: $result_value, Expected: \"{'boolean': 0}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_bluetooth_sharing_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_bluetooth_sharing_disable" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_bluetooth_sharing_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_bluetooth_sharing_disable failed (Result: $result_value, Expected: "{'boolean': 0}")"
         else
-            echo "$(date -u) system_settings_bluetooth_sharing_disable failed (Result: $result_value, Expected: "{'boolean': 0}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_bluetooth_sharing_disable failed (Result: $result_value, Expected: \"{'boolean': 0}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_bluetooth_sharing_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_bluetooth_sharing_disable" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_bluetooth_sharing_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_bluetooth_sharing_disable failed (Result: $result_value, Expected: "{'boolean': 0}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -3980,7 +4620,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_bluetooth_sharing_disable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_bluetooth_sharing_disable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_bluetooth_sharing_disable -dict-add finding -bool NO
 fi
     
@@ -3989,7 +4629,6 @@ fi
 # * CM-7, CM-7(1)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_cd_dvd_sharing_disable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/pgrep -q ODSAgent; /bin/echo $?
 )
@@ -4007,20 +4646,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_cd_dvd_sharing_disable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_cd_dvd_sharing_disable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) system_settings_cd_dvd_sharing_disable passed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_cd_dvd_sharing_disable passed (Result: $result_value, Expected: \"{'integer': 1}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_cd_dvd_sharing_disable -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_cd_dvd_sharing_disable" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_cd_dvd_sharing_disable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_cd_dvd_sharing_disable passed (Result: $result_value, Expected: "{'integer': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_cd_dvd_sharing_disable failed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_cd_dvd_sharing_disable failed (Result: $result_value, Expected: \"{'integer': 1}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_cd_dvd_sharing_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_cd_dvd_sharing_disable" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_cd_dvd_sharing_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_cd_dvd_sharing_disable failed (Result: $result_value, Expected: "{'integer': 1}")"
         else
-            echo "$(date -u) system_settings_cd_dvd_sharing_disable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_cd_dvd_sharing_disable failed (Result: $result_value, Expected: \"{'integer': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_cd_dvd_sharing_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_cd_dvd_sharing_disable" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_cd_dvd_sharing_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_cd_dvd_sharing_disable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -4028,7 +4677,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_cd_dvd_sharing_disable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_cd_dvd_sharing_disable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_cd_dvd_sharing_disable -dict-add finding -bool NO
 fi
     
@@ -4037,7 +4686,6 @@ fi
 # * CM-7, CM-7(1)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_content_caching_disable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/osascript -l JavaScript << EOS
 $.NSUserDefaults.alloc.initWithSuiteName('com.apple.applicationaccess')\
@@ -4058,20 +4706,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_content_caching_disable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_content_caching_disable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "false" ]]; then
-        echo "$(date -u) system_settings_content_caching_disable passed (Result: $result_value, Expected: "{'string': 'false'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_content_caching_disable passed (Result: $result_value, Expected: \"{'string': 'false'}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_content_caching_disable -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_content_caching_disable" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_content_caching_disable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_content_caching_disable passed (Result: $result_value, Expected: "{'string': 'false'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_content_caching_disable failed (Result: $result_value, Expected: "{'string': 'false'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_content_caching_disable failed (Result: $result_value, Expected: \"{'string': 'false'}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_content_caching_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_content_caching_disable" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_content_caching_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_content_caching_disable failed (Result: $result_value, Expected: "{'string': 'false'}")"
         else
-            echo "$(date -u) system_settings_content_caching_disable failed (Result: $result_value, Expected: "{'string': 'false'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_content_caching_disable failed (Result: $result_value, Expected: \"{'string': 'false'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_content_caching_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_content_caching_disable" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_content_caching_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_content_caching_disable failed (Result: $result_value, Expected: "{'string': 'false'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -4079,7 +4737,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_content_caching_disable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_content_caching_disable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_content_caching_disable -dict-add finding -bool NO
 fi
     
@@ -4088,7 +4746,6 @@ fi
 # * SI-2
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_critical_update_install_enforce ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/osascript -l JavaScript << EOS
 $.NSUserDefaults.alloc.initWithSuiteName('com.apple.SoftwareUpdate')\
@@ -4109,20 +4766,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_critical_update_install_enforce'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_critical_update_install_enforce" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "true" ]]; then
-        echo "$(date -u) system_settings_critical_update_install_enforce passed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_critical_update_install_enforce passed (Result: $result_value, Expected: \"{'string': 'true'}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_critical_update_install_enforce -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_critical_update_install_enforce" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_critical_update_install_enforce -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_critical_update_install_enforce passed (Result: $result_value, Expected: "{'string': 'true'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_critical_update_install_enforce failed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_critical_update_install_enforce failed (Result: $result_value, Expected: \"{'string': 'true'}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_critical_update_install_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_critical_update_install_enforce" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_critical_update_install_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_critical_update_install_enforce failed (Result: $result_value, Expected: "{'string': 'true'}")"
         else
-            echo "$(date -u) system_settings_critical_update_install_enforce failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_critical_update_install_enforce failed (Result: $result_value, Expected: \"{'string': 'true'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_critical_update_install_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_critical_update_install_enforce" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_critical_update_install_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_critical_update_install_enforce failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -4130,7 +4797,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_critical_update_install_enforce does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_critical_update_install_enforce does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_critical_update_install_enforce -dict-add finding -bool NO
 fi
     
@@ -4141,7 +4808,6 @@ fi
 # * SI-11
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_diagnostics_reports_disable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/osascript -l JavaScript << EOS
 function run() {
@@ -4171,20 +4837,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_diagnostics_reports_disable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_diagnostics_reports_disable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "true" ]]; then
-        echo "$(date -u) system_settings_diagnostics_reports_disable passed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_diagnostics_reports_disable passed (Result: $result_value, Expected: \"{'string': 'true'}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_diagnostics_reports_disable -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_diagnostics_reports_disable" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_diagnostics_reports_disable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_diagnostics_reports_disable passed (Result: $result_value, Expected: "{'string': 'true'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_diagnostics_reports_disable failed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_diagnostics_reports_disable failed (Result: $result_value, Expected: \"{'string': 'true'}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_diagnostics_reports_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_diagnostics_reports_disable" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_diagnostics_reports_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_diagnostics_reports_disable failed (Result: $result_value, Expected: "{'string': 'true'}")"
         else
-            echo "$(date -u) system_settings_diagnostics_reports_disable failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_diagnostics_reports_disable failed (Result: $result_value, Expected: \"{'string': 'true'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_diagnostics_reports_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_diagnostics_reports_disable" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_diagnostics_reports_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_diagnostics_reports_disable failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -4192,7 +4868,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_diagnostics_reports_disable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_diagnostics_reports_disable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_diagnostics_reports_disable -dict-add finding -bool NO
 fi
     
@@ -4201,7 +4877,6 @@ fi
 # * SC-28, SC-28(1)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_filevault_enforce ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(dontAllowDisable=$(/usr/bin/osascript -l JavaScript << EOS
 $.NSUserDefaults.alloc.initWithSuiteName('com.apple.MCX')\
@@ -4229,20 +4904,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_filevault_enforce'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_filevault_enforce" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) system_settings_filevault_enforce passed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_filevault_enforce passed (Result: $result_value, Expected: \"{'integer': 1}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_filevault_enforce -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_filevault_enforce" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_filevault_enforce -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_filevault_enforce passed (Result: $result_value, Expected: "{'integer': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_filevault_enforce failed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_filevault_enforce failed (Result: $result_value, Expected: \"{'integer': 1}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_filevault_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_filevault_enforce" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_filevault_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_filevault_enforce failed (Result: $result_value, Expected: "{'integer': 1}")"
         else
-            echo "$(date -u) system_settings_filevault_enforce failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_filevault_enforce failed (Result: $result_value, Expected: \"{'integer': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_filevault_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_filevault_enforce" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_filevault_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_filevault_enforce failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -4250,7 +4935,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_filevault_enforce does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_filevault_enforce does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_filevault_enforce -dict-add finding -bool NO
 fi
     
@@ -4261,7 +4946,6 @@ fi
 # * SC-7, SC-7(12)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_firewall_enable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(profile="$(/usr/bin/osascript -l JavaScript << EOS
 $.NSUserDefaults.alloc.initWithSuiteName('com.apple.security.firewall')\
@@ -4291,20 +4975,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_firewall_enable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_firewall_enable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "true" ]]; then
-        echo "$(date -u) system_settings_firewall_enable passed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_firewall_enable passed (Result: $result_value, Expected: \"{'string': 'true'}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_firewall_enable -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_firewall_enable" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_firewall_enable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_firewall_enable passed (Result: $result_value, Expected: "{'string': 'true'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_firewall_enable failed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_firewall_enable failed (Result: $result_value, Expected: \"{'string': 'true'}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_firewall_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_firewall_enable" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_firewall_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_firewall_enable failed (Result: $result_value, Expected: "{'string': 'true'}")"
         else
-            echo "$(date -u) system_settings_firewall_enable failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_firewall_enable failed (Result: $result_value, Expected: \"{'string': 'true'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_firewall_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_firewall_enable" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_firewall_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_firewall_enable failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -4312,7 +5006,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_firewall_enable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_firewall_enable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_firewall_enable -dict-add finding -bool NO
 fi
     
@@ -4322,7 +5016,6 @@ fi
 # * SC-7, SC-7(16)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_firewall_stealth_mode_enable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(profile="$(/usr/bin/osascript -l JavaScript << EOS
 $.NSUserDefaults.alloc.initWithSuiteName('com.apple.security.firewall')\
@@ -4352,20 +5045,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_firewall_stealth_mode_enable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_firewall_stealth_mode_enable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "true" ]]; then
-        echo "$(date -u) system_settings_firewall_stealth_mode_enable passed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_firewall_stealth_mode_enable passed (Result: $result_value, Expected: \"{'string': 'true'}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_firewall_stealth_mode_enable -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_firewall_stealth_mode_enable" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_firewall_stealth_mode_enable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_firewall_stealth_mode_enable passed (Result: $result_value, Expected: "{'string': 'true'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_firewall_stealth_mode_enable failed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_firewall_stealth_mode_enable failed (Result: $result_value, Expected: \"{'string': 'true'}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_firewall_stealth_mode_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_firewall_stealth_mode_enable" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_firewall_stealth_mode_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_firewall_stealth_mode_enable failed (Result: $result_value, Expected: "{'string': 'true'}")"
         else
-            echo "$(date -u) system_settings_firewall_stealth_mode_enable failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_firewall_stealth_mode_enable failed (Result: $result_value, Expected: \"{'string': 'true'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_firewall_stealth_mode_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_firewall_stealth_mode_enable" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_firewall_stealth_mode_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_firewall_stealth_mode_enable failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -4373,7 +5076,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_firewall_stealth_mode_enable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_firewall_stealth_mode_enable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_firewall_stealth_mode_enable -dict-add finding -bool NO
 fi
     
@@ -4382,7 +5085,6 @@ fi
 # * AC-2, AC-2(9)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_guest_access_smb_disable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/defaults read /Library/Preferences/SystemConfiguration/com.apple.smb.server AllowGuestAccess
 )
@@ -4400,20 +5102,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_guest_access_smb_disable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_guest_access_smb_disable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "0" ]]; then
-        echo "$(date -u) system_settings_guest_access_smb_disable passed (Result: $result_value, Expected: "{'boolean': 0}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_guest_access_smb_disable passed (Result: $result_value, Expected: \"{'boolean': 0}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_guest_access_smb_disable -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_guest_access_smb_disable" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_guest_access_smb_disable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_guest_access_smb_disable passed (Result: $result_value, Expected: "{'boolean': 0}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_guest_access_smb_disable failed (Result: $result_value, Expected: "{'boolean': 0}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_guest_access_smb_disable failed (Result: $result_value, Expected: \"{'boolean': 0}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_guest_access_smb_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_guest_access_smb_disable" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_guest_access_smb_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_guest_access_smb_disable failed (Result: $result_value, Expected: "{'boolean': 0}")"
         else
-            echo "$(date -u) system_settings_guest_access_smb_disable failed (Result: $result_value, Expected: "{'boolean': 0}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_guest_access_smb_disable failed (Result: $result_value, Expected: \"{'boolean': 0}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_guest_access_smb_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_guest_access_smb_disable" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_guest_access_smb_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_guest_access_smb_disable failed (Result: $result_value, Expected: "{'boolean': 0}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -4421,7 +5133,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_guest_access_smb_disable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_guest_access_smb_disable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_guest_access_smb_disable -dict-add finding -bool NO
 fi
     
@@ -4430,7 +5142,6 @@ fi
 # * AC-2, AC-2(9)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_guest_account_disable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/osascript -l JavaScript << EOS
 function run() {
@@ -4460,20 +5171,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_guest_account_disable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_guest_account_disable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "true" ]]; then
-        echo "$(date -u) system_settings_guest_account_disable passed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_guest_account_disable passed (Result: $result_value, Expected: \"{'string': 'true'}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_guest_account_disable -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_guest_account_disable" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_guest_account_disable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_guest_account_disable passed (Result: $result_value, Expected: "{'string': 'true'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_guest_account_disable failed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_guest_account_disable failed (Result: $result_value, Expected: \"{'string': 'true'}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_guest_account_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_guest_account_disable" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_guest_account_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_guest_account_disable failed (Result: $result_value, Expected: "{'string': 'true'}")"
         else
-            echo "$(date -u) system_settings_guest_account_disable failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_guest_account_disable failed (Result: $result_value, Expected: \"{'string': 'true'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_guest_account_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_guest_account_disable" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_guest_account_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_guest_account_disable failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -4481,7 +5202,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_guest_account_disable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_guest_account_disable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_guest_account_disable -dict-add finding -bool NO
 fi
     
@@ -4490,7 +5211,6 @@ fi
 # * AC-11(1)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_hot_corners_secure ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(bl_corner="$(/usr/bin/defaults read /Users/"$CURRENT_USER"/Library/Preferences/com.apple.dock wvous-bl-corner 2>/dev/null)"
 tl_corner="$(/usr/bin/defaults read /Users/"$CURRENT_USER"/Library/Preferences/com.apple.dock wvous-tl-corner 2>/dev/null)"
@@ -4515,20 +5235,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_hot_corners_secure'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_hot_corners_secure" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "0" ]]; then
-        echo "$(date -u) system_settings_hot_corners_secure passed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_hot_corners_secure passed (Result: $result_value, Expected: \"{'integer': 0}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_hot_corners_secure -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_hot_corners_secure" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_hot_corners_secure -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_hot_corners_secure passed (Result: $result_value, Expected: "{'integer': 0}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_hot_corners_secure failed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_hot_corners_secure failed (Result: $result_value, Expected: \"{'integer': 0}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_hot_corners_secure -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_hot_corners_secure" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_hot_corners_secure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_hot_corners_secure failed (Result: $result_value, Expected: "{'integer': 0}")"
         else
-            echo "$(date -u) system_settings_hot_corners_secure failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_hot_corners_secure failed (Result: $result_value, Expected: \"{'integer': 0}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_hot_corners_secure -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_hot_corners_secure" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_hot_corners_secure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_hot_corners_secure failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -4536,7 +5266,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_hot_corners_secure does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_hot_corners_secure does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_hot_corners_secure -dict-add finding -bool NO
 fi
     
@@ -4545,7 +5275,6 @@ fi
 # * N/A
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_install_macos_updates_enforce ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/osascript -l JavaScript << EOS
 $.NSUserDefaults.alloc.initWithSuiteName('com.apple.SoftwareUpdate')\
@@ -4566,20 +5295,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_install_macos_updates_enforce'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_install_macos_updates_enforce" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "true" ]]; then
-        echo "$(date -u) system_settings_install_macos_updates_enforce passed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_install_macos_updates_enforce passed (Result: $result_value, Expected: \"{'string': 'true'}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_install_macos_updates_enforce -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_install_macos_updates_enforce" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_install_macos_updates_enforce -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_install_macos_updates_enforce passed (Result: $result_value, Expected: "{'string': 'true'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_install_macos_updates_enforce failed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_install_macos_updates_enforce failed (Result: $result_value, Expected: \"{'string': 'true'}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_install_macos_updates_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_install_macos_updates_enforce" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_install_macos_updates_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_install_macos_updates_enforce failed (Result: $result_value, Expected: "{'string': 'true'}")"
         else
-            echo "$(date -u) system_settings_install_macos_updates_enforce failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_install_macos_updates_enforce failed (Result: $result_value, Expected: \"{'string': 'true'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_install_macos_updates_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_install_macos_updates_enforce" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_install_macos_updates_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_install_macos_updates_enforce failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -4587,7 +5326,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_install_macos_updates_enforce does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_install_macos_updates_enforce does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_install_macos_updates_enforce -dict-add finding -bool NO
 fi
     
@@ -4597,7 +5336,6 @@ fi
 # * AC-4
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_internet_sharing_disable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/osascript -l JavaScript << EOS
 $.NSUserDefaults.alloc.initWithSuiteName('com.apple.MCX')\
@@ -4618,20 +5356,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_internet_sharing_disable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_internet_sharing_disable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "true" ]]; then
-        echo "$(date -u) system_settings_internet_sharing_disable passed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_internet_sharing_disable passed (Result: $result_value, Expected: \"{'string': 'true'}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_internet_sharing_disable -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_internet_sharing_disable" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_internet_sharing_disable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_internet_sharing_disable passed (Result: $result_value, Expected: "{'string': 'true'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_internet_sharing_disable failed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_internet_sharing_disable failed (Result: $result_value, Expected: \"{'string': 'true'}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_internet_sharing_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_internet_sharing_disable" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_internet_sharing_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_internet_sharing_disable failed (Result: $result_value, Expected: "{'string': 'true'}")"
         else
-            echo "$(date -u) system_settings_internet_sharing_disable failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_internet_sharing_disable failed (Result: $result_value, Expected: \"{'string': 'true'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_internet_sharing_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_internet_sharing_disable" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_internet_sharing_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_internet_sharing_disable failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -4639,7 +5387,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_internet_sharing_disable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_internet_sharing_disable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_internet_sharing_disable -dict-add finding -bool NO
 fi
     
@@ -4648,7 +5396,6 @@ fi
 # * N/A
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_location_services_enable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/sudo -u _locationd /usr/bin/osascript -l JavaScript << EOS
 $.NSUserDefaults.alloc.initWithSuiteName('com.apple.locationd')\
@@ -4669,20 +5416,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_location_services_enable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_location_services_enable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "true" ]]; then
-        echo "$(date -u) system_settings_location_services_enable passed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_location_services_enable passed (Result: $result_value, Expected: \"{'string': 'true'}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_location_services_enable -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_location_services_enable" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_location_services_enable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_location_services_enable passed (Result: $result_value, Expected: "{'string': 'true'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_location_services_enable failed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_location_services_enable failed (Result: $result_value, Expected: \"{'string': 'true'}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_location_services_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_location_services_enable" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_location_services_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_location_services_enable failed (Result: $result_value, Expected: "{'string': 'true'}")"
         else
-            echo "$(date -u) system_settings_location_services_enable failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_location_services_enable failed (Result: $result_value, Expected: \"{'string': 'true'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_location_services_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_location_services_enable" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_location_services_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_location_services_enable failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -4690,7 +5447,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_location_services_enable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_location_services_enable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_location_services_enable -dict-add finding -bool NO
 fi
     
@@ -4699,7 +5456,6 @@ fi
 # * N/A
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_location_services_menu_enforce ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/defaults read /Library/Preferences/com.apple.locationmenu.plist ShowSystemServices
 )
@@ -4717,20 +5473,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_location_services_menu_enforce'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_location_services_menu_enforce" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) system_settings_location_services_menu_enforce passed (Result: $result_value, Expected: "{'boolean': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_location_services_menu_enforce passed (Result: $result_value, Expected: \"{'boolean': 1}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_location_services_menu_enforce -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_location_services_menu_enforce" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_location_services_menu_enforce -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_location_services_menu_enforce passed (Result: $result_value, Expected: "{'boolean': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_location_services_menu_enforce failed (Result: $result_value, Expected: "{'boolean': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_location_services_menu_enforce failed (Result: $result_value, Expected: \"{'boolean': 1}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_location_services_menu_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_location_services_menu_enforce" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_location_services_menu_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_location_services_menu_enforce failed (Result: $result_value, Expected: "{'boolean': 1}")"
         else
-            echo "$(date -u) system_settings_location_services_menu_enforce failed (Result: $result_value, Expected: "{'boolean': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_location_services_menu_enforce failed (Result: $result_value, Expected: \"{'boolean': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_location_services_menu_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_location_services_menu_enforce" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_location_services_menu_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_location_services_menu_enforce failed (Result: $result_value, Expected: "{'boolean': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -4738,7 +5504,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_location_services_menu_enforce does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_location_services_menu_enforce does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_location_services_menu_enforce -dict-add finding -bool NO
 fi
     
@@ -4747,14 +5513,13 @@ fi
 # * N/A
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_loginwindow_loginwindowtext_enable ...' | tee -a "$audit_log"
     unset result_value
-    result_value=$(/usr/bin/osascript -l JavaScript << EOS
+    result_value=$(/usr/bin/osascript -l JavaScript << EOS | /usr/bin/base64
 $.NSUserDefaults.alloc.initWithSuiteName('com.apple.loginwindow')\
 .objectForKey('LoginwindowText').js
 EOS
 )
-    # expected result {'string': 'center for internet security test message'}
+    # expected result base64: q2vudgvyigzvcibjbnrlcm5ldcbtzwn1cml0esbuzxn0ie1lc3nhz2uk
 
 
     # check to see if rule is exempt
@@ -4768,28 +5533,38 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_loginwindow_loginwindowtext_enable'))["exempt_reason"]
 EOS
-)
-
-    if [[ $result_value == "Center for Internet Security Test Message" ]]; then
-        echo "$(date -u) system_settings_loginwindow_loginwindowtext_enable passed (Result: $result_value, Expected: "{'string': 'center for internet security test message'}")" | /usr/bin/tee -a "$audit_log"
+)   
+    customref="$(echo "system_settings_loginwindow_loginwindowtext_enable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
+    if [[ $result_value == "Q2VudGVyIGZvciBJbnRlcm5ldCBTZWN1cml0eSBUZXN0IE1lc3NhZ2UK" ]]; then
+        logmessage "system_settings_loginwindow_loginwindowtext_enable passed (Result: $result_value, Expected: \"base64: q2vudgvyigzvcibjbnrlcm5ldcbtzwn1cml0esbuzxn0ie1lc3nhz2uk\")"
         /usr/bin/defaults write "$audit_plist" system_settings_loginwindow_loginwindowtext_enable -dict-add finding -bool NO
-        /usr/bin/logger "mSCP: cis_lvl2 - system_settings_loginwindow_loginwindowtext_enable passed (Result: $result_value, Expected: "{'string': 'center for internet security test message'}")"
+        if [[ ! "$customref" == "system_settings_loginwindow_loginwindowtext_enable" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_loginwindow_loginwindowtext_enable -dict-add reference -string "$customref"
+        fi
+        /usr/bin/logger "mSCP: cis_lvl2 - system_settings_loginwindow_loginwindowtext_enable passed (Result: $result_value, Expected: "base64: q2vudgvyigzvcibjbnrlcm5ldcbtzwn1cml0esbuzxn0ie1lc3nhz2uk")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_loginwindow_loginwindowtext_enable failed (Result: $result_value, Expected: "{'string': 'center for internet security test message'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_loginwindow_loginwindowtext_enable failed (Result: $result_value, Expected: \"base64: q2vudgvyigzvcibjbnrlcm5ldcbtzwn1cml0esbuzxn0ie1lc3nhz2uk\")"
             /usr/bin/defaults write "$audit_plist" system_settings_loginwindow_loginwindowtext_enable -dict-add finding -bool YES
-            /usr/bin/logger "mSCP: cis_lvl2 - system_settings_loginwindow_loginwindowtext_enable failed (Result: $result_value, Expected: "{'string': 'center for internet security test message'}")"
+            if [[ ! "$customref" == "system_settings_loginwindow_loginwindowtext_enable" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_loginwindow_loginwindowtext_enable -dict-add reference -string "$customref"
+            fi
+            /usr/bin/logger "mSCP: cis_lvl2 - system_settings_loginwindow_loginwindowtext_enable failed (Result: $result_value, Expected: "base64: q2vudgvyigzvcibjbnrlcm5ldcbtzwn1cml0esbuzxn0ie1lc3nhz2uk")"
         else
-            echo "$(date -u) system_settings_loginwindow_loginwindowtext_enable failed (Result: $result_value, Expected: "{'string': 'center for internet security test message'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_loginwindow_loginwindowtext_enable failed (Result: $result_value, Expected: \"base64: q2vudgvyigzvcibjbnrlcm5ldcbtzwn1cml0esbuzxn0ie1lc3nhz2uk\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_loginwindow_loginwindowtext_enable -dict-add finding -bool YES
-            /usr/bin/logger "mSCP: cis_lvl2 - system_settings_loginwindow_loginwindowtext_enable failed (Result: $result_value, Expected: "{'string': 'center for internet security test message'}") - Exemption Allowed (Reason: "$exempt_reason")"
+            if [[ ! "$customref" == "system_settings_loginwindow_loginwindowtext_enable" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_loginwindow_loginwindowtext_enable -dict-add reference -string "$customref"
+            fi
+            /usr/bin/logger "mSCP: cis_lvl2 - system_settings_loginwindow_loginwindowtext_enable failed (Result: $result_value, Expected: "base64: q2vudgvyigzvcibjbnrlcm5ldcbtzwn1cml0esbuzxn0ie1lc3nhz2uk") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
     fi
 
 
 else
-    echo "$(date -u) system_settings_loginwindow_loginwindowtext_enable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_loginwindow_loginwindowtext_enable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_loginwindow_loginwindowtext_enable -dict-add finding -bool NO
 fi
     
@@ -4798,7 +5573,6 @@ fi
 # * IA-2
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_loginwindow_prompt_username_password_enforce ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/osascript -l JavaScript << EOS
 $.NSUserDefaults.alloc.initWithSuiteName('com.apple.loginwindow')\
@@ -4819,20 +5593,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_loginwindow_prompt_username_password_enforce'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_loginwindow_prompt_username_password_enforce" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "true" ]]; then
-        echo "$(date -u) system_settings_loginwindow_prompt_username_password_enforce passed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_loginwindow_prompt_username_password_enforce passed (Result: $result_value, Expected: \"{'string': 'true'}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_loginwindow_prompt_username_password_enforce -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_loginwindow_prompt_username_password_enforce" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_loginwindow_prompt_username_password_enforce -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_loginwindow_prompt_username_password_enforce passed (Result: $result_value, Expected: "{'string': 'true'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_loginwindow_prompt_username_password_enforce failed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_loginwindow_prompt_username_password_enforce failed (Result: $result_value, Expected: \"{'string': 'true'}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_loginwindow_prompt_username_password_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_loginwindow_prompt_username_password_enforce" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_loginwindow_prompt_username_password_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_loginwindow_prompt_username_password_enforce failed (Result: $result_value, Expected: "{'string': 'true'}")"
         else
-            echo "$(date -u) system_settings_loginwindow_prompt_username_password_enforce failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_loginwindow_prompt_username_password_enforce failed (Result: $result_value, Expected: \"{'string': 'true'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_loginwindow_prompt_username_password_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_loginwindow_prompt_username_password_enforce" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_loginwindow_prompt_username_password_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_loginwindow_prompt_username_password_enforce failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -4840,7 +5624,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_loginwindow_prompt_username_password_enforce does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_loginwindow_prompt_username_password_enforce does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_loginwindow_prompt_username_password_enforce -dict-add finding -bool NO
 fi
     
@@ -4850,7 +5634,6 @@ fi
 # * AC-3
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_media_sharing_disabled ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/osascript -l JavaScript << EOS
 function run() {
@@ -4882,20 +5665,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_media_sharing_disabled'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_media_sharing_disabled" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "true" ]]; then
-        echo "$(date -u) system_settings_media_sharing_disabled passed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_media_sharing_disabled passed (Result: $result_value, Expected: \"{'string': 'true'}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_media_sharing_disabled -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_media_sharing_disabled" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_media_sharing_disabled -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_media_sharing_disabled passed (Result: $result_value, Expected: "{'string': 'true'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_media_sharing_disabled failed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_media_sharing_disabled failed (Result: $result_value, Expected: \"{'string': 'true'}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_media_sharing_disabled -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_media_sharing_disabled" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_media_sharing_disabled -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_media_sharing_disabled failed (Result: $result_value, Expected: "{'string': 'true'}")"
         else
-            echo "$(date -u) system_settings_media_sharing_disabled failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_media_sharing_disabled failed (Result: $result_value, Expected: \"{'string': 'true'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_media_sharing_disabled -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_media_sharing_disabled" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_media_sharing_disabled -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_media_sharing_disabled failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -4903,7 +5696,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_media_sharing_disabled does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_media_sharing_disabled does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_media_sharing_disabled -dict-add finding -bool NO
 fi
     
@@ -4912,7 +5705,6 @@ fi
 # * IA-6
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_password_hints_disable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/osascript -l JavaScript << EOS
 $.NSUserDefaults.alloc.initWithSuiteName('com.apple.loginwindow')\
@@ -4933,20 +5725,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_password_hints_disable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_password_hints_disable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "0" ]]; then
-        echo "$(date -u) system_settings_password_hints_disable passed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_password_hints_disable passed (Result: $result_value, Expected: \"{'integer': 0}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_password_hints_disable -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_password_hints_disable" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_password_hints_disable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_password_hints_disable passed (Result: $result_value, Expected: "{'integer': 0}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_password_hints_disable failed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_password_hints_disable failed (Result: $result_value, Expected: \"{'integer': 0}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_password_hints_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_password_hints_disable" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_password_hints_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_password_hints_disable failed (Result: $result_value, Expected: "{'integer': 0}")"
         else
-            echo "$(date -u) system_settings_password_hints_disable failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_password_hints_disable failed (Result: $result_value, Expected: \"{'integer': 0}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_password_hints_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_password_hints_disable" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_password_hints_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_password_hints_disable failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -4954,7 +5756,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_password_hints_disable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_password_hints_disable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_password_hints_disable -dict-add finding -bool NO
 fi
     
@@ -4965,7 +5767,6 @@ fi
 # * SC-7(10)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_personalized_advertising_disable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/osascript -l JavaScript << EOS
 $.NSUserDefaults.alloc.initWithSuiteName('com.apple.applicationaccess')\
@@ -4986,20 +5787,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_personalized_advertising_disable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_personalized_advertising_disable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "false" ]]; then
-        echo "$(date -u) system_settings_personalized_advertising_disable passed (Result: $result_value, Expected: "{'string': 'false'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_personalized_advertising_disable passed (Result: $result_value, Expected: \"{'string': 'false'}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_personalized_advertising_disable -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_personalized_advertising_disable" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_personalized_advertising_disable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_personalized_advertising_disable passed (Result: $result_value, Expected: "{'string': 'false'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_personalized_advertising_disable failed (Result: $result_value, Expected: "{'string': 'false'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_personalized_advertising_disable failed (Result: $result_value, Expected: \"{'string': 'false'}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_personalized_advertising_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_personalized_advertising_disable" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_personalized_advertising_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_personalized_advertising_disable failed (Result: $result_value, Expected: "{'string': 'false'}")"
         else
-            echo "$(date -u) system_settings_personalized_advertising_disable failed (Result: $result_value, Expected: "{'string': 'false'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_personalized_advertising_disable failed (Result: $result_value, Expected: \"{'string': 'false'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_personalized_advertising_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_personalized_advertising_disable" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_personalized_advertising_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_personalized_advertising_disable failed (Result: $result_value, Expected: "{'string': 'false'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -5007,7 +5818,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_personalized_advertising_disable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_personalized_advertising_disable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_personalized_advertising_disable -dict-add finding -bool NO
 fi
     
@@ -5016,7 +5827,6 @@ fi
 # * CM-7, CM-7(1)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_printer_sharing_disable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/sbin/cupsctl | /usr/bin/grep -c "_share_printers=0"
 )
@@ -5034,20 +5844,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_printer_sharing_disable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_printer_sharing_disable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) system_settings_printer_sharing_disable passed (Result: $result_value, Expected: "{'boolean': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_printer_sharing_disable passed (Result: $result_value, Expected: \"{'boolean': 1}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_printer_sharing_disable -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_printer_sharing_disable" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_printer_sharing_disable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_printer_sharing_disable passed (Result: $result_value, Expected: "{'boolean': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_printer_sharing_disable failed (Result: $result_value, Expected: "{'boolean': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_printer_sharing_disable failed (Result: $result_value, Expected: \"{'boolean': 1}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_printer_sharing_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_printer_sharing_disable" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_printer_sharing_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_printer_sharing_disable failed (Result: $result_value, Expected: "{'boolean': 1}")"
         else
-            echo "$(date -u) system_settings_printer_sharing_disable failed (Result: $result_value, Expected: "{'boolean': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_printer_sharing_disable failed (Result: $result_value, Expected: \"{'boolean': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_printer_sharing_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_printer_sharing_disable" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_printer_sharing_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_printer_sharing_disable failed (Result: $result_value, Expected: "{'boolean': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -5055,7 +5875,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_printer_sharing_disable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_printer_sharing_disable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_printer_sharing_disable -dict-add finding -bool NO
 fi
     
@@ -5065,7 +5885,6 @@ fi
 # * AC-3
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_rae_disable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/bin/launchctl print-disabled system | /usr/bin/grep -c '"com.apple.AEServer" => disabled'
 )
@@ -5083,20 +5902,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_rae_disable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_rae_disable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) system_settings_rae_disable passed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_rae_disable passed (Result: $result_value, Expected: \"{'integer': 1}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_rae_disable -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_rae_disable" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_rae_disable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_rae_disable passed (Result: $result_value, Expected: "{'integer': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_rae_disable failed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_rae_disable failed (Result: $result_value, Expected: \"{'integer': 1}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_rae_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_rae_disable" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_rae_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_rae_disable failed (Result: $result_value, Expected: "{'integer': 1}")"
         else
-            echo "$(date -u) system_settings_rae_disable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_rae_disable failed (Result: $result_value, Expected: \"{'integer': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_rae_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_rae_disable" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_rae_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_rae_disable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -5104,7 +5933,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_rae_disable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_rae_disable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_rae_disable -dict-add finding -bool NO
 fi
     
@@ -5113,7 +5942,6 @@ fi
 # * CM-7, CM-7(1)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_remote_management_disable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/libexec/mdmclient QuerySecurityInfo | /usr/bin/grep -c "RemoteDesktopEnabled = 0"
 )
@@ -5131,20 +5959,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_remote_management_disable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_remote_management_disable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) system_settings_remote_management_disable passed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_remote_management_disable passed (Result: $result_value, Expected: \"{'integer': 1}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_remote_management_disable -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_remote_management_disable" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_remote_management_disable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_remote_management_disable passed (Result: $result_value, Expected: "{'integer': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_remote_management_disable failed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_remote_management_disable failed (Result: $result_value, Expected: \"{'integer': 1}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_remote_management_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_remote_management_disable" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_remote_management_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_remote_management_disable failed (Result: $result_value, Expected: "{'integer': 1}")"
         else
-            echo "$(date -u) system_settings_remote_management_disable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_remote_management_disable failed (Result: $result_value, Expected: \"{'integer': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_remote_management_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_remote_management_disable" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_remote_management_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_remote_management_disable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -5152,7 +5990,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_remote_management_disable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_remote_management_disable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_remote_management_disable -dict-add finding -bool NO
 fi
     
@@ -5162,7 +6000,6 @@ fi
 # * AC-3
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_screen_sharing_disable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/bin/launchctl print-disabled system | /usr/bin/grep -c '"com.apple.screensharing" => disabled'
 )
@@ -5180,20 +6017,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_screen_sharing_disable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_screen_sharing_disable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) system_settings_screen_sharing_disable passed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_screen_sharing_disable passed (Result: $result_value, Expected: \"{'integer': 1}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_screen_sharing_disable -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_screen_sharing_disable" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_screen_sharing_disable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_screen_sharing_disable passed (Result: $result_value, Expected: "{'integer': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_screen_sharing_disable failed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_screen_sharing_disable failed (Result: $result_value, Expected: \"{'integer': 1}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_screen_sharing_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_screen_sharing_disable" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_screen_sharing_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_screen_sharing_disable failed (Result: $result_value, Expected: "{'integer': 1}")"
         else
-            echo "$(date -u) system_settings_screen_sharing_disable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_screen_sharing_disable failed (Result: $result_value, Expected: \"{'integer': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_screen_sharing_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_screen_sharing_disable" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_screen_sharing_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_screen_sharing_disable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -5201,7 +6048,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_screen_sharing_disable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_screen_sharing_disable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_screen_sharing_disable -dict-add finding -bool NO
 fi
     
@@ -5210,7 +6057,6 @@ fi
 # * AC-11
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_screensaver_ask_for_password_delay_enforce ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/osascript -l JavaScript << EOS
 function run() {
@@ -5238,20 +6084,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_screensaver_ask_for_password_delay_enforce'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_screensaver_ask_for_password_delay_enforce" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "true" ]]; then
-        echo "$(date -u) system_settings_screensaver_ask_for_password_delay_enforce passed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_screensaver_ask_for_password_delay_enforce passed (Result: $result_value, Expected: \"{'string': 'true'}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_screensaver_ask_for_password_delay_enforce -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_screensaver_ask_for_password_delay_enforce" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_screensaver_ask_for_password_delay_enforce -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_screensaver_ask_for_password_delay_enforce passed (Result: $result_value, Expected: "{'string': 'true'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_screensaver_ask_for_password_delay_enforce failed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_screensaver_ask_for_password_delay_enforce failed (Result: $result_value, Expected: \"{'string': 'true'}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_screensaver_ask_for_password_delay_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_screensaver_ask_for_password_delay_enforce" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_screensaver_ask_for_password_delay_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_screensaver_ask_for_password_delay_enforce failed (Result: $result_value, Expected: "{'string': 'true'}")"
         else
-            echo "$(date -u) system_settings_screensaver_ask_for_password_delay_enforce failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_screensaver_ask_for_password_delay_enforce failed (Result: $result_value, Expected: \"{'string': 'true'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_screensaver_ask_for_password_delay_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_screensaver_ask_for_password_delay_enforce" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_screensaver_ask_for_password_delay_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_screensaver_ask_for_password_delay_enforce failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -5259,7 +6115,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_screensaver_ask_for_password_delay_enforce does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_screensaver_ask_for_password_delay_enforce does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_screensaver_ask_for_password_delay_enforce -dict-add finding -bool NO
 fi
     
@@ -5269,7 +6125,6 @@ fi
 # * IA-11
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_screensaver_timeout_enforce ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/osascript -l JavaScript << EOS
 function run() {
@@ -5297,20 +6152,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_screensaver_timeout_enforce'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_screensaver_timeout_enforce" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "true" ]]; then
-        echo "$(date -u) system_settings_screensaver_timeout_enforce passed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_screensaver_timeout_enforce passed (Result: $result_value, Expected: \"{'string': 'true'}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_screensaver_timeout_enforce -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_screensaver_timeout_enforce" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_screensaver_timeout_enforce -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_screensaver_timeout_enforce passed (Result: $result_value, Expected: "{'string': 'true'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_screensaver_timeout_enforce failed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_screensaver_timeout_enforce failed (Result: $result_value, Expected: \"{'string': 'true'}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_screensaver_timeout_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_screensaver_timeout_enforce" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_screensaver_timeout_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_screensaver_timeout_enforce failed (Result: $result_value, Expected: "{'string': 'true'}")"
         else
-            echo "$(date -u) system_settings_screensaver_timeout_enforce failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_screensaver_timeout_enforce failed (Result: $result_value, Expected: \"{'string': 'true'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_screensaver_timeout_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_screensaver_timeout_enforce" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_screensaver_timeout_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_screensaver_timeout_enforce failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -5318,7 +6183,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_screensaver_timeout_enforce does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_screensaver_timeout_enforce does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_screensaver_timeout_enforce -dict-add finding -bool NO
 fi
     
@@ -5328,7 +6193,6 @@ fi
 # * AC-3
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_smbd_disable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/bin/launchctl print-disabled system | /usr/bin/grep -c '"com.apple.smbd" => disabled'
 )
@@ -5346,20 +6210,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_smbd_disable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_smbd_disable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) system_settings_smbd_disable passed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_smbd_disable passed (Result: $result_value, Expected: \"{'integer': 1}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_smbd_disable -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_smbd_disable" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_smbd_disable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_smbd_disable passed (Result: $result_value, Expected: "{'integer': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_smbd_disable failed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_smbd_disable failed (Result: $result_value, Expected: \"{'integer': 1}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_smbd_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_smbd_disable" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_smbd_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_smbd_disable failed (Result: $result_value, Expected: "{'integer': 1}")"
         else
-            echo "$(date -u) system_settings_smbd_disable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_smbd_disable failed (Result: $result_value, Expected: \"{'integer': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_smbd_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_smbd_disable" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_smbd_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_smbd_disable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -5367,7 +6241,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_smbd_disable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_smbd_disable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_smbd_disable -dict-add finding -bool NO
 fi
     
@@ -5376,7 +6250,6 @@ fi
 # * N/A
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_software_update_app_update_enforce ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/osascript -l JavaScript << EOS
 $.NSUserDefaults.alloc.initWithSuiteName('com.apple.SoftwareUpdate')\
@@ -5397,20 +6270,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_software_update_app_update_enforce'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_software_update_app_update_enforce" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "true" ]]; then
-        echo "$(date -u) system_settings_software_update_app_update_enforce passed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_software_update_app_update_enforce passed (Result: $result_value, Expected: \"{'string': 'true'}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_software_update_app_update_enforce -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_software_update_app_update_enforce" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_software_update_app_update_enforce -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_software_update_app_update_enforce passed (Result: $result_value, Expected: "{'string': 'true'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_software_update_app_update_enforce failed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_software_update_app_update_enforce failed (Result: $result_value, Expected: \"{'string': 'true'}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_software_update_app_update_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_software_update_app_update_enforce" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_software_update_app_update_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_software_update_app_update_enforce failed (Result: $result_value, Expected: "{'string': 'true'}")"
         else
-            echo "$(date -u) system_settings_software_update_app_update_enforce failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_software_update_app_update_enforce failed (Result: $result_value, Expected: \"{'string': 'true'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_software_update_app_update_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_software_update_app_update_enforce" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_software_update_app_update_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_software_update_app_update_enforce failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -5418,7 +6301,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_software_update_app_update_enforce does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_software_update_app_update_enforce does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_software_update_app_update_enforce -dict-add finding -bool NO
 fi
     
@@ -5427,7 +6310,6 @@ fi
 # * N/A
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_software_update_download_enforce ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/osascript -l JavaScript << EOS
 $.NSUserDefaults.alloc.initWithSuiteName('com.apple.SoftwareUpdate')\
@@ -5448,20 +6330,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_software_update_download_enforce'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_software_update_download_enforce" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "true" ]]; then
-        echo "$(date -u) system_settings_software_update_download_enforce passed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_software_update_download_enforce passed (Result: $result_value, Expected: \"{'string': 'true'}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_software_update_download_enforce -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_software_update_download_enforce" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_software_update_download_enforce -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_software_update_download_enforce passed (Result: $result_value, Expected: "{'string': 'true'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_software_update_download_enforce failed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_software_update_download_enforce failed (Result: $result_value, Expected: \"{'string': 'true'}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_software_update_download_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_software_update_download_enforce" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_software_update_download_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_software_update_download_enforce failed (Result: $result_value, Expected: "{'string': 'true'}")"
         else
-            echo "$(date -u) system_settings_software_update_download_enforce failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_software_update_download_enforce failed (Result: $result_value, Expected: \"{'string': 'true'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_software_update_download_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_software_update_download_enforce" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_software_update_download_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_software_update_download_enforce failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -5469,7 +6361,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_software_update_download_enforce does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_software_update_download_enforce does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_software_update_download_enforce -dict-add finding -bool NO
 fi
     
@@ -5478,7 +6370,6 @@ fi
 # * SI-2(5)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_software_update_enforce ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/osascript -l JavaScript << EOS
 $.NSUserDefaults.alloc.initWithSuiteName('com.apple.SoftwareUpdate')\
@@ -5499,20 +6390,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_software_update_enforce'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_software_update_enforce" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "true" ]]; then
-        echo "$(date -u) system_settings_software_update_enforce passed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_software_update_enforce passed (Result: $result_value, Expected: \"{'string': 'true'}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_software_update_enforce -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_software_update_enforce" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_software_update_enforce -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_software_update_enforce passed (Result: $result_value, Expected: "{'string': 'true'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_software_update_enforce failed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_software_update_enforce failed (Result: $result_value, Expected: \"{'string': 'true'}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_software_update_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_software_update_enforce" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_software_update_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_software_update_enforce failed (Result: $result_value, Expected: "{'string': 'true'}")"
         else
-            echo "$(date -u) system_settings_software_update_enforce failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_software_update_enforce failed (Result: $result_value, Expected: \"{'string': 'true'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_software_update_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_software_update_enforce" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_software_update_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_software_update_enforce failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -5520,7 +6421,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_software_update_enforce does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_software_update_enforce does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_software_update_enforce -dict-add finding -bool NO
 fi
     
@@ -5529,7 +6430,6 @@ fi
 # * N/A
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_softwareupdate_current ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(softwareupdate_date_epoch=$(/bin/date -j -f "%Y-%m-%d" "$(/usr/bin/defaults read /Library/Preferences/com.apple.SoftwareUpdate.plist LastFullSuccessfulDate | /usr/bin/awk '{print $1}')" "+%s")
 thirty_days_epoch=$(/bin/date -v -30d "+%s")
@@ -5553,20 +6453,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_softwareupdate_current'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_softwareupdate_current" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) system_settings_softwareupdate_current passed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_softwareupdate_current passed (Result: $result_value, Expected: \"{'integer': 1}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_softwareupdate_current -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_softwareupdate_current" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_softwareupdate_current -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_softwareupdate_current passed (Result: $result_value, Expected: "{'integer': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_softwareupdate_current failed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_softwareupdate_current failed (Result: $result_value, Expected: \"{'integer': 1}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_softwareupdate_current -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_softwareupdate_current" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_softwareupdate_current -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_softwareupdate_current failed (Result: $result_value, Expected: "{'integer': 1}")"
         else
-            echo "$(date -u) system_settings_softwareupdate_current failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_softwareupdate_current failed (Result: $result_value, Expected: \"{'integer': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_softwareupdate_current -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_softwareupdate_current" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_softwareupdate_current -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_softwareupdate_current failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -5574,7 +6484,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_softwareupdate_current does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_softwareupdate_current does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_softwareupdate_current -dict-add finding -bool NO
 fi
     
@@ -5584,7 +6494,6 @@ fi
 # * CM-7, CM-7(1)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_ssh_disable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/bin/launchctl print-disabled system | /usr/bin/grep -c '"com.openssh.sshd" => disabled'
 )
@@ -5602,20 +6511,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_ssh_disable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_ssh_disable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) system_settings_ssh_disable passed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_ssh_disable passed (Result: $result_value, Expected: \"{'integer': 1}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_ssh_disable -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_ssh_disable" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_ssh_disable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_ssh_disable passed (Result: $result_value, Expected: "{'integer': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_ssh_disable failed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_ssh_disable failed (Result: $result_value, Expected: \"{'integer': 1}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_ssh_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_ssh_disable" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_ssh_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_ssh_disable failed (Result: $result_value, Expected: "{'integer': 1}")"
         else
-            echo "$(date -u) system_settings_ssh_disable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_ssh_disable failed (Result: $result_value, Expected: \"{'integer': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_ssh_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_ssh_disable" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_ssh_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_ssh_disable failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -5623,7 +6542,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_ssh_disable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_ssh_disable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_ssh_disable -dict-add finding -bool NO
 fi
     
@@ -5632,7 +6551,6 @@ fi
 # * AC-6, AC-6(1), AC-6(2)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_system_wide_preferences_configure ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(authDBs=("system.preferences" "system.preferences.energysaver" "system.preferences.network" "system.preferences.printing" "system.preferences.sharing" "system.preferences.softwareupdate" "system.preferences.startupdisk" "system.preferences.timemachine")
 result="1"
@@ -5657,20 +6575,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_system_wide_preferences_configure'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_system_wide_preferences_configure" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "1" ]]; then
-        echo "$(date -u) system_settings_system_wide_preferences_configure passed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_system_wide_preferences_configure passed (Result: $result_value, Expected: \"{'integer': 1}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_system_wide_preferences_configure -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_system_wide_preferences_configure" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_system_wide_preferences_configure -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_system_wide_preferences_configure passed (Result: $result_value, Expected: "{'integer': 1}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_system_wide_preferences_configure failed (Result: $result_value, Expected: "{'integer': 1}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_system_wide_preferences_configure failed (Result: $result_value, Expected: \"{'integer': 1}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_system_wide_preferences_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_system_wide_preferences_configure" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_system_wide_preferences_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_system_wide_preferences_configure failed (Result: $result_value, Expected: "{'integer': 1}")"
         else
-            echo "$(date -u) system_settings_system_wide_preferences_configure failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_system_wide_preferences_configure failed (Result: $result_value, Expected: \"{'integer': 1}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_system_wide_preferences_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_system_wide_preferences_configure" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_system_wide_preferences_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_system_wide_preferences_configure failed (Result: $result_value, Expected: "{'integer': 1}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -5678,7 +6606,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_system_wide_preferences_configure does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_system_wide_preferences_configure does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_system_wide_preferences_configure -dict-add finding -bool NO
 fi
     
@@ -5687,7 +6615,6 @@ fi
 # * N/A
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_time_machine_auto_backup_enable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/osascript -l JavaScript << EOS
 $.NSUserDefaults.alloc.initWithSuiteName('com.apple.TimeMachine')\
@@ -5708,20 +6635,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_time_machine_auto_backup_enable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_time_machine_auto_backup_enable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "true" ]]; then
-        echo "$(date -u) system_settings_time_machine_auto_backup_enable passed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_time_machine_auto_backup_enable passed (Result: $result_value, Expected: \"{'string': 'true'}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_time_machine_auto_backup_enable -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_time_machine_auto_backup_enable" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_time_machine_auto_backup_enable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_time_machine_auto_backup_enable passed (Result: $result_value, Expected: "{'string': 'true'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_time_machine_auto_backup_enable failed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_time_machine_auto_backup_enable failed (Result: $result_value, Expected: \"{'string': 'true'}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_time_machine_auto_backup_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_time_machine_auto_backup_enable" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_time_machine_auto_backup_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_time_machine_auto_backup_enable failed (Result: $result_value, Expected: "{'string': 'true'}")"
         else
-            echo "$(date -u) system_settings_time_machine_auto_backup_enable failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_time_machine_auto_backup_enable failed (Result: $result_value, Expected: \"{'string': 'true'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_time_machine_auto_backup_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_time_machine_auto_backup_enable" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_time_machine_auto_backup_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_time_machine_auto_backup_enable failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -5729,7 +6666,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_time_machine_auto_backup_enable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_time_machine_auto_backup_enable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_time_machine_auto_backup_enable -dict-add finding -bool NO
 fi
     
@@ -5738,7 +6675,6 @@ fi
 # * N/A
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_time_machine_encrypted_configure ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(error_count=0
 for tm in $(/usr/bin/tmutil destinationinfo 2>/dev/null| /usr/bin/awk -F': ' '/Name/{print $2}'); do
@@ -5764,20 +6700,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_time_machine_encrypted_configure'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_time_machine_encrypted_configure" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "0" ]]; then
-        echo "$(date -u) system_settings_time_machine_encrypted_configure passed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_time_machine_encrypted_configure passed (Result: $result_value, Expected: \"{'integer': 0}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_time_machine_encrypted_configure -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_time_machine_encrypted_configure" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_time_machine_encrypted_configure -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_time_machine_encrypted_configure passed (Result: $result_value, Expected: "{'integer': 0}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_time_machine_encrypted_configure failed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_time_machine_encrypted_configure failed (Result: $result_value, Expected: \"{'integer': 0}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_time_machine_encrypted_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_time_machine_encrypted_configure" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_time_machine_encrypted_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_time_machine_encrypted_configure failed (Result: $result_value, Expected: "{'integer': 0}")"
         else
-            echo "$(date -u) system_settings_time_machine_encrypted_configure failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_time_machine_encrypted_configure failed (Result: $result_value, Expected: \"{'integer': 0}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_time_machine_encrypted_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_time_machine_encrypted_configure" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_time_machine_encrypted_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_time_machine_encrypted_configure failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -5785,7 +6731,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_time_machine_encrypted_configure does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_time_machine_encrypted_configure does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_time_machine_encrypted_configure -dict-add finding -bool NO
 fi
     
@@ -5795,7 +6741,6 @@ fi
 # * SC-45(1)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_time_server_configure ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/osascript -l JavaScript << EOS
 $.NSUserDefaults.alloc.initWithSuiteName('com.apple.MCX')\
@@ -5816,20 +6761,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_time_server_configure'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_time_server_configure" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "time.apple.com" ]]; then
-        echo "$(date -u) system_settings_time_server_configure passed (Result: $result_value, Expected: "{'string': 'time.apple.com'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_time_server_configure passed (Result: $result_value, Expected: \"{'string': 'time.apple.com'}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_time_server_configure -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_time_server_configure" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_time_server_configure -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_time_server_configure passed (Result: $result_value, Expected: "{'string': 'time.apple.com'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_time_server_configure failed (Result: $result_value, Expected: "{'string': 'time.apple.com'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_time_server_configure failed (Result: $result_value, Expected: \"{'string': 'time.apple.com'}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_time_server_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_time_server_configure" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_time_server_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_time_server_configure failed (Result: $result_value, Expected: "{'string': 'time.apple.com'}")"
         else
-            echo "$(date -u) system_settings_time_server_configure failed (Result: $result_value, Expected: "{'string': 'time.apple.com'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_time_server_configure failed (Result: $result_value, Expected: \"{'string': 'time.apple.com'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_time_server_configure -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_time_server_configure" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_time_server_configure -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_time_server_configure failed (Result: $result_value, Expected: "{'string': 'time.apple.com'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -5837,7 +6792,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_time_server_configure does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_time_server_configure does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_time_server_configure -dict-add finding -bool NO
 fi
     
@@ -5847,7 +6802,6 @@ fi
 # * SC-45(1)
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_time_server_enforce ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/osascript -l JavaScript << EOS
 $.NSUserDefaults.alloc.initWithSuiteName('com.apple.timed')\
@@ -5868,20 +6822,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_time_server_enforce'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_time_server_enforce" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "true" ]]; then
-        echo "$(date -u) system_settings_time_server_enforce passed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_time_server_enforce passed (Result: $result_value, Expected: \"{'string': 'true'}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_time_server_enforce -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_time_server_enforce" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_time_server_enforce -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_time_server_enforce passed (Result: $result_value, Expected: "{'string': 'true'}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_time_server_enforce failed (Result: $result_value, Expected: "{'string': 'true'}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_time_server_enforce failed (Result: $result_value, Expected: \"{'string': 'true'}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_time_server_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_time_server_enforce" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_time_server_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_time_server_enforce failed (Result: $result_value, Expected: "{'string': 'true'}")"
         else
-            echo "$(date -u) system_settings_time_server_enforce failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_time_server_enforce failed (Result: $result_value, Expected: \"{'string': 'true'}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_time_server_enforce -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_time_server_enforce" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_time_server_enforce -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_time_server_enforce failed (Result: $result_value, Expected: "{'string': 'true'}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -5889,7 +6853,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_time_server_enforce does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_time_server_enforce does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_time_server_enforce -dict-add finding -bool NO
 fi
     
@@ -5898,7 +6862,6 @@ fi
 # * N/A
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_wake_network_access_disable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/pmset -g custom | /usr/bin/awk '/womp/ { sum+=$2 } END {print sum}'
 )
@@ -5916,20 +6879,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_wake_network_access_disable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_wake_network_access_disable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "0" ]]; then
-        echo "$(date -u) system_settings_wake_network_access_disable passed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_wake_network_access_disable passed (Result: $result_value, Expected: \"{'integer': 0}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_wake_network_access_disable -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_wake_network_access_disable" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_wake_network_access_disable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_wake_network_access_disable passed (Result: $result_value, Expected: "{'integer': 0}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_wake_network_access_disable failed (Result: $result_value, Expected: "{'integer': 0}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_wake_network_access_disable failed (Result: $result_value, Expected: \"{'integer': 0}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_wake_network_access_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_wake_network_access_disable" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_wake_network_access_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_wake_network_access_disable failed (Result: $result_value, Expected: "{'integer': 0}")"
         else
-            echo "$(date -u) system_settings_wake_network_access_disable failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_wake_network_access_disable failed (Result: $result_value, Expected: \"{'integer': 0}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_wake_network_access_disable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_wake_network_access_disable" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_wake_network_access_disable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_wake_network_access_disable failed (Result: $result_value, Expected: "{'integer': 0}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -5937,7 +6910,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_wake_network_access_disable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_wake_network_access_disable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_wake_network_access_disable -dict-add finding -bool NO
 fi
     
@@ -5946,7 +6919,6 @@ fi
 # * N/A
 rule_arch=""
 if [[ "$arch" == "$rule_arch" ]] || [[ -z "$rule_arch" ]]; then
-    #echo 'Running the command to check the settings for: system_settings_wifi_menu_enable ...' | tee -a "$audit_log"
     unset result_value
     result_value=$(/usr/bin/osascript -l JavaScript << EOS
 $.NSUserDefaults.alloc.initWithSuiteName('com.apple.controlcenter')\
@@ -5967,20 +6939,30 @@ EOS
     exempt_reason=$(/usr/bin/osascript -l JavaScript << EOS 2>/dev/null
 ObjC.unwrap($.NSUserDefaults.alloc.initWithSuiteName('org.cis_lvl2.audit').objectForKey('system_settings_wifi_menu_enable'))["exempt_reason"]
 EOS
-)
-
+)   
+    customref="$(echo "system_settings_wifi_menu_enable" | rev | cut -d ' ' -f 2- | rev)"
+    customref="$(echo "$customref" | tr " " ",")"
     if [[ $result_value == "18" ]]; then
-        echo "$(date -u) system_settings_wifi_menu_enable passed (Result: $result_value, Expected: "{'integer': 18}")" | /usr/bin/tee -a "$audit_log"
+        logmessage "system_settings_wifi_menu_enable passed (Result: $result_value, Expected: \"{'integer': 18}\")"
         /usr/bin/defaults write "$audit_plist" system_settings_wifi_menu_enable -dict-add finding -bool NO
+        if [[ ! "$customref" == "system_settings_wifi_menu_enable" ]]; then
+            /usr/bin/defaults write "$audit_plist" system_settings_wifi_menu_enable -dict-add reference -string "$customref"
+        fi
         /usr/bin/logger "mSCP: cis_lvl2 - system_settings_wifi_menu_enable passed (Result: $result_value, Expected: "{'integer': 18}")"
     else
         if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
-            echo "$(date -u) system_settings_wifi_menu_enable failed (Result: $result_value, Expected: "{'integer': 18}")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_wifi_menu_enable failed (Result: $result_value, Expected: \"{'integer': 18}\")"
             /usr/bin/defaults write "$audit_plist" system_settings_wifi_menu_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_wifi_menu_enable" ]]; then
+                /usr/bin/defaults write "$audit_plist" system_settings_wifi_menu_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_wifi_menu_enable failed (Result: $result_value, Expected: "{'integer': 18}")"
         else
-            echo "$(date -u) system_settings_wifi_menu_enable failed (Result: $result_value, Expected: "{'integer': 18}") - Exemption Allowed (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+            logmessage "system_settings_wifi_menu_enable failed (Result: $result_value, Expected: \"{'integer': 18}\") - Exemption Allowed (Reason: \"$exempt_reason\")"
             /usr/bin/defaults write "$audit_plist" system_settings_wifi_menu_enable -dict-add finding -bool YES
+            if [[ ! "$customref" == "system_settings_wifi_menu_enable" ]]; then
+              /usr/bin/defaults write "$audit_plist" system_settings_wifi_menu_enable -dict-add reference -string "$customref"
+            fi
             /usr/bin/logger "mSCP: cis_lvl2 - system_settings_wifi_menu_enable failed (Result: $result_value, Expected: "{'integer': 18}") - Exemption Allowed (Reason: "$exempt_reason")"
             /bin/sleep 1
         fi
@@ -5988,7 +6970,7 @@ EOS
 
 
 else
-    echo "$(date -u) system_settings_wifi_menu_enable does not apply to this architechture" | tee -a "$audit_log"
+    logmessage "system_settings_wifi_menu_enable does not apply to this architecture"
     /usr/bin/defaults write "$audit_plist" system_settings_wifi_menu_enable -dict-add finding -bool NO
 fi
     
@@ -5999,7 +6981,7 @@ if [[ ! $check ]] && [[ ! $cfc ]];then
     pause
 fi
 
-}
+} 2>/dev/null
 
 run_fix(){
 
@@ -6058,14 +7040,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $audit_acls_files_configure_audit_score == "true" ]]; then
         ask 'audit_acls_files_configure - Run the command(s)-> /bin/chmod -RN /var/audit ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: audit_acls_files_configure ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: audit_acls_files_configure ..."
             /bin/chmod -RN /var/audit
         fi
     else
-        echo "$(date -u) Settings for: audit_acls_files_configure already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: audit_acls_files_configure already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) audit_acls_files_configure has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "audit_acls_files_configure has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: audit_acls_folders_configure -----#####
@@ -6091,14 +7073,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $audit_acls_folders_configure_audit_score == "true" ]]; then
         ask 'audit_acls_folders_configure - Run the command(s)-> /bin/chmod -N /var/audit ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: audit_acls_folders_configure ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: audit_acls_folders_configure ..."
             /bin/chmod -N /var/audit
         fi
     else
-        echo "$(date -u) Settings for: audit_acls_folders_configure already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: audit_acls_folders_configure already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) audit_acls_folders_configure has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "audit_acls_folders_configure has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: audit_auditd_enabled -----#####
@@ -6135,7 +7117,7 @@ fi
 /bin/launchctl bootstrap system /System/Library/LaunchDaemons/com.apple.auditd.plist
 /usr/sbin/audit -i ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: audit_auditd_enabled ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: audit_auditd_enabled ..."
             if [[ ! -e /etc/security/audit_control ]] && [[ -e /etc/security/audit_control.example ]];then
   /bin/cp /etc/security/audit_control.example /etc/security/audit_control
 fi
@@ -6145,10 +7127,10 @@ fi
 /usr/sbin/audit -i
         fi
     else
-        echo "$(date -u) Settings for: audit_auditd_enabled already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: audit_auditd_enabled already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) audit_auditd_enabled has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "audit_auditd_enabled has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: audit_control_acls_configure -----#####
@@ -6174,14 +7156,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $audit_control_acls_configure_audit_score == "true" ]]; then
         ask 'audit_control_acls_configure - Run the command(s)-> /bin/chmod -N /etc/security/audit_control ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: audit_control_acls_configure ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: audit_control_acls_configure ..."
             /bin/chmod -N /etc/security/audit_control
         fi
     else
-        echo "$(date -u) Settings for: audit_control_acls_configure already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: audit_control_acls_configure already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) audit_control_acls_configure has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "audit_control_acls_configure has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: audit_control_group_configure -----#####
@@ -6207,14 +7189,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $audit_control_group_configure_audit_score == "true" ]]; then
         ask 'audit_control_group_configure - Run the command(s)-> /usr/bin/chgrp wheel /etc/security/audit_control ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: audit_control_group_configure ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: audit_control_group_configure ..."
             /usr/bin/chgrp wheel /etc/security/audit_control
         fi
     else
-        echo "$(date -u) Settings for: audit_control_group_configure already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: audit_control_group_configure already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) audit_control_group_configure has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "audit_control_group_configure has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: audit_control_mode_configure -----#####
@@ -6240,14 +7222,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $audit_control_mode_configure_audit_score == "true" ]]; then
         ask 'audit_control_mode_configure - Run the command(s)-> /bin/chmod 440 /etc/security/audit_control ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: audit_control_mode_configure ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: audit_control_mode_configure ..."
             /bin/chmod 440 /etc/security/audit_control
         fi
     else
-        echo "$(date -u) Settings for: audit_control_mode_configure already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: audit_control_mode_configure already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) audit_control_mode_configure has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "audit_control_mode_configure has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: audit_control_owner_configure -----#####
@@ -6273,14 +7255,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $audit_control_owner_configure_audit_score == "true" ]]; then
         ask 'audit_control_owner_configure - Run the command(s)-> /usr/sbin/chown root /etc/security/audit_control ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: audit_control_owner_configure ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: audit_control_owner_configure ..."
             /usr/sbin/chown root /etc/security/audit_control
         fi
     else
-        echo "$(date -u) Settings for: audit_control_owner_configure already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: audit_control_owner_configure already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) audit_control_owner_configure has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "audit_control_owner_configure has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: audit_files_group_configure -----#####
@@ -6306,14 +7288,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $audit_files_group_configure_audit_score == "true" ]]; then
         ask 'audit_files_group_configure - Run the command(s)-> /usr/bin/chgrp -R wheel /var/audit/* ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: audit_files_group_configure ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: audit_files_group_configure ..."
             /usr/bin/chgrp -R wheel /var/audit/*
         fi
     else
-        echo "$(date -u) Settings for: audit_files_group_configure already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: audit_files_group_configure already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) audit_files_group_configure has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "audit_files_group_configure has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: audit_files_mode_configure -----#####
@@ -6339,14 +7321,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $audit_files_mode_configure_audit_score == "true" ]]; then
         ask 'audit_files_mode_configure - Run the command(s)-> /bin/chmod 440 /var/audit/* ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: audit_files_mode_configure ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: audit_files_mode_configure ..."
             /bin/chmod 440 /var/audit/*
         fi
     else
-        echo "$(date -u) Settings for: audit_files_mode_configure already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: audit_files_mode_configure already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) audit_files_mode_configure has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "audit_files_mode_configure has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: audit_files_owner_configure -----#####
@@ -6372,14 +7354,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $audit_files_owner_configure_audit_score == "true" ]]; then
         ask 'audit_files_owner_configure - Run the command(s)-> /usr/sbin/chown -R root /var/audit/* ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: audit_files_owner_configure ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: audit_files_owner_configure ..."
             /usr/sbin/chown -R root /var/audit/*
         fi
     else
-        echo "$(date -u) Settings for: audit_files_owner_configure already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: audit_files_owner_configure already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) audit_files_owner_configure has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "audit_files_owner_configure has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: audit_flags_aa_configure -----#####
@@ -6409,14 +7391,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $audit_flags_aa_configure_audit_score == "true" ]]; then
         ask 'audit_flags_aa_configure - Run the command(s)-> /usr/bin/grep -qE "^flags.*[^-]aa" /etc/security/audit_control || /usr/bin/sed -i.bak '"'"'/^flags/ s/$/,aa/'"'"' /etc/security/audit_control; /usr/sbin/audit -s ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: audit_flags_aa_configure ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: audit_flags_aa_configure ..."
             /usr/bin/grep -qE "^flags.*[^-]aa" /etc/security/audit_control || /usr/bin/sed -i.bak '/^flags/ s/$/,aa/' /etc/security/audit_control; /usr/sbin/audit -s
         fi
     else
-        echo "$(date -u) Settings for: audit_flags_aa_configure already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: audit_flags_aa_configure already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) audit_flags_aa_configure has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "audit_flags_aa_configure has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: audit_flags_ad_configure -----#####
@@ -6447,14 +7429,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $audit_flags_ad_configure_audit_score == "true" ]]; then
         ask 'audit_flags_ad_configure - Run the command(s)-> /usr/bin/grep -qE "^flags.*[^-]ad" /etc/security/audit_control || /usr/bin/sed -i.bak '"'"'/^flags/ s/$/,ad/'"'"' /etc/security/audit_control; /usr/sbin/audit -s ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: audit_flags_ad_configure ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: audit_flags_ad_configure ..."
             /usr/bin/grep -qE "^flags.*[^-]ad" /etc/security/audit_control || /usr/bin/sed -i.bak '/^flags/ s/$/,ad/' /etc/security/audit_control; /usr/sbin/audit -s
         fi
     else
-        echo "$(date -u) Settings for: audit_flags_ad_configure already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: audit_flags_ad_configure already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) audit_flags_ad_configure has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "audit_flags_ad_configure has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: audit_flags_ex_configure -----#####
@@ -6483,14 +7465,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $audit_flags_ex_configure_audit_score == "true" ]]; then
         ask 'audit_flags_ex_configure - Run the command(s)-> /usr/bin/grep -qE "^flags.*-ex" /etc/security/audit_control || /usr/bin/sed -i.bak '"'"'/^flags/ s/$/,-ex/'"'"' /etc/security/audit_control; /usr/sbin/audit -s ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: audit_flags_ex_configure ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: audit_flags_ex_configure ..."
             /usr/bin/grep -qE "^flags.*-ex" /etc/security/audit_control || /usr/bin/sed -i.bak '/^flags/ s/$/,-ex/' /etc/security/audit_control; /usr/sbin/audit -s
         fi
     else
-        echo "$(date -u) Settings for: audit_flags_ex_configure already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: audit_flags_ex_configure already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) audit_flags_ex_configure has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "audit_flags_ex_configure has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: audit_flags_fm_failed_configure -----#####
@@ -6521,14 +7503,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $audit_flags_fm_failed_configure_audit_score == "true" ]]; then
         ask 'audit_flags_fm_failed_configure - Run the command(s)-> /usr/bin/grep -qE "^flags.*-fm" /etc/security/audit_control || /usr/bin/sed -i.bak '"'"'/^flags/ s/$/,-fm/'"'"' /etc/security/audit_control;/usr/sbin/audit -s ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: audit_flags_fm_failed_configure ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: audit_flags_fm_failed_configure ..."
             /usr/bin/grep -qE "^flags.*-fm" /etc/security/audit_control || /usr/bin/sed -i.bak '/^flags/ s/$/,-fm/' /etc/security/audit_control;/usr/sbin/audit -s
         fi
     else
-        echo "$(date -u) Settings for: audit_flags_fm_failed_configure already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: audit_flags_fm_failed_configure already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) audit_flags_fm_failed_configure has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "audit_flags_fm_failed_configure has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: audit_flags_fr_configure -----#####
@@ -6559,14 +7541,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $audit_flags_fr_configure_audit_score == "true" ]]; then
         ask 'audit_flags_fr_configure - Run the command(s)-> /usr/bin/grep -qE "^flags.*-fr" /etc/security/audit_control || /usr/bin/sed -i.bak '"'"'/^flags/ s/$/,-fr/'"'"' /etc/security/audit_control;/usr/sbin/audit -s ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: audit_flags_fr_configure ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: audit_flags_fr_configure ..."
             /usr/bin/grep -qE "^flags.*-fr" /etc/security/audit_control || /usr/bin/sed -i.bak '/^flags/ s/$/,-fr/' /etc/security/audit_control;/usr/sbin/audit -s
         fi
     else
-        echo "$(date -u) Settings for: audit_flags_fr_configure already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: audit_flags_fr_configure already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) audit_flags_fr_configure has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "audit_flags_fr_configure has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: audit_flags_fw_configure -----#####
@@ -6597,14 +7579,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $audit_flags_fw_configure_audit_score == "true" ]]; then
         ask 'audit_flags_fw_configure - Run the command(s)-> /usr/bin/grep -qE "^flags.*-fw" /etc/security/audit_control || /usr/bin/sed -i.bak '"'"'/^flags/ s/$/,-fw/'"'"' /etc/security/audit_control;/usr/sbin/audit -s ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: audit_flags_fw_configure ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: audit_flags_fw_configure ..."
             /usr/bin/grep -qE "^flags.*-fw" /etc/security/audit_control || /usr/bin/sed -i.bak '/^flags/ s/$/,-fw/' /etc/security/audit_control;/usr/sbin/audit -s
         fi
     else
-        echo "$(date -u) Settings for: audit_flags_fw_configure already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: audit_flags_fw_configure already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) audit_flags_fw_configure has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "audit_flags_fw_configure has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: audit_flags_lo_configure -----#####
@@ -6634,14 +7616,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $audit_flags_lo_configure_audit_score == "true" ]]; then
         ask 'audit_flags_lo_configure - Run the command(s)-> /usr/bin/grep -qE "^flags.*[^-]lo" /etc/security/audit_control || /usr/bin/sed -i.bak '"'"'/^flags/ s/$/,lo/'"'"' /etc/security/audit_control; /usr/sbin/audit -s ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: audit_flags_lo_configure ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: audit_flags_lo_configure ..."
             /usr/bin/grep -qE "^flags.*[^-]lo" /etc/security/audit_control || /usr/bin/sed -i.bak '/^flags/ s/$/,lo/' /etc/security/audit_control; /usr/sbin/audit -s
         fi
     else
-        echo "$(date -u) Settings for: audit_flags_lo_configure already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: audit_flags_lo_configure already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) audit_flags_lo_configure has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "audit_flags_lo_configure has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: audit_folder_group_configure -----#####
@@ -6667,14 +7649,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $audit_folder_group_configure_audit_score == "true" ]]; then
         ask 'audit_folder_group_configure - Run the command(s)-> /usr/bin/chgrp wheel /var/audit ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: audit_folder_group_configure ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: audit_folder_group_configure ..."
             /usr/bin/chgrp wheel /var/audit
         fi
     else
-        echo "$(date -u) Settings for: audit_folder_group_configure already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: audit_folder_group_configure already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) audit_folder_group_configure has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "audit_folder_group_configure has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: audit_folder_owner_configure -----#####
@@ -6700,14 +7682,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $audit_folder_owner_configure_audit_score == "true" ]]; then
         ask 'audit_folder_owner_configure - Run the command(s)-> /usr/sbin/chown root /var/audit ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: audit_folder_owner_configure ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: audit_folder_owner_configure ..."
             /usr/sbin/chown root /var/audit
         fi
     else
-        echo "$(date -u) Settings for: audit_folder_owner_configure already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: audit_folder_owner_configure already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) audit_folder_owner_configure has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "audit_folder_owner_configure has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: audit_folders_mode_configure -----#####
@@ -6733,14 +7715,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $audit_folders_mode_configure_audit_score == "true" ]]; then
         ask 'audit_folders_mode_configure - Run the command(s)-> /bin/chmod 700 /var/audit ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: audit_folders_mode_configure ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: audit_folders_mode_configure ..."
             /bin/chmod 700 /var/audit
         fi
     else
-        echo "$(date -u) Settings for: audit_folders_mode_configure already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: audit_folders_mode_configure already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) audit_folders_mode_configure has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "audit_folders_mode_configure has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: audit_retention_configure -----#####
@@ -6767,14 +7749,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $audit_retention_configure_audit_score == "true" ]]; then
         ask 'audit_retention_configure - Run the command(s)-> /usr/bin/sed -i.bak '"'"'s/^expire-after.*/expire-after:60d OR 5G/'"'"' /etc/security/audit_control; /usr/sbin/audit -s ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: audit_retention_configure ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: audit_retention_configure ..."
             /usr/bin/sed -i.bak 's/^expire-after.*/expire-after:60d OR 5G/' /etc/security/audit_control; /usr/sbin/audit -s
         fi
     else
-        echo "$(date -u) Settings for: audit_retention_configure already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: audit_retention_configure already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) audit_retention_configure has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "audit_retention_configure has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: os_anti_virus_installed -----#####
@@ -6801,15 +7783,15 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
         ask 'os_anti_virus_installed - Run the command(s)-> /bin/launchctl load -w /Library/Apple/System/Library/LaunchDaemons/com.apple.XProtect.daemon.scan.plist
 /bin/launchctl load -w /Library/Apple/System/Library/LaunchDaemons/com.apple.XprotectFramework.PluginService.plist ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: os_anti_virus_installed ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: os_anti_virus_installed ..."
             /bin/launchctl load -w /Library/Apple/System/Library/LaunchDaemons/com.apple.XProtect.daemon.scan.plist
 /bin/launchctl load -w /Library/Apple/System/Library/LaunchDaemons/com.apple.XprotectFramework.PluginService.plist
         fi
     else
-        echo "$(date -u) Settings for: os_anti_virus_installed already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: os_anti_virus_installed already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) os_anti_virus_installed has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "os_anti_virus_installed has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: os_authenticated_root_enable -----#####
@@ -6839,14 +7821,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $os_authenticated_root_enable_audit_score == "true" ]]; then
         ask 'os_authenticated_root_enable - Run the command(s)-> /usr/bin/csrutil authenticated-root enable ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: os_authenticated_root_enable ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: os_authenticated_root_enable ..."
             /usr/bin/csrutil authenticated-root enable
         fi
     else
-        echo "$(date -u) Settings for: os_authenticated_root_enable already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: os_authenticated_root_enable already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) os_authenticated_root_enable has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "os_authenticated_root_enable has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: os_gatekeeper_enable -----#####
@@ -6875,14 +7857,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $os_gatekeeper_enable_audit_score == "true" ]]; then
         ask 'os_gatekeeper_enable - Run the command(s)-> /usr/sbin/spctl --global-enable ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: os_gatekeeper_enable ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: os_gatekeeper_enable ..."
             /usr/sbin/spctl --global-enable
         fi
     else
-        echo "$(date -u) Settings for: os_gatekeeper_enable already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: os_gatekeeper_enable already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) os_gatekeeper_enable has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "os_gatekeeper_enable has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: os_guest_folder_removed -----#####
@@ -6908,14 +7890,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $os_guest_folder_removed_audit_score == "true" ]]; then
         ask 'os_guest_folder_removed - Run the command(s)-> /bin/rm -Rf /Users/Guest ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: os_guest_folder_removed ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: os_guest_folder_removed ..."
             /bin/rm -Rf /Users/Guest
         fi
     else
-        echo "$(date -u) Settings for: os_guest_folder_removed already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: os_guest_folder_removed already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) os_guest_folder_removed has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "os_guest_folder_removed has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: os_hibernate_mode_apple_silicon_enable -----#####
@@ -6943,16 +7925,16 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
 /usr/bin/pmset -a displaysleep 15
 /usr/bin/pmset -a hibernatemode 25 ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: os_hibernate_mode_apple_silicon_enable ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: os_hibernate_mode_apple_silicon_enable ..."
             /usr/bin/pmset -a sleep 10
 /usr/bin/pmset -a displaysleep 15
 /usr/bin/pmset -a hibernatemode 25
         fi
     else
-        echo "$(date -u) Settings for: os_hibernate_mode_apple_silicon_enable already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: os_hibernate_mode_apple_silicon_enable already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) os_hibernate_mode_apple_silicon_enable has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "os_hibernate_mode_apple_silicon_enable has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: os_hibernate_mode_intel_enable -----#####
@@ -6981,17 +7963,17 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
 /usr/bin/pmset -a highstandbythreshold 90
 /usr/bin/pmset -a hibernatemode 25 ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: os_hibernate_mode_intel_enable ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: os_hibernate_mode_intel_enable ..."
             /usr/bin/pmset -a standbydelaylow 900
 /usr/bin/pmset -a standbydelayhigh 900
 /usr/bin/pmset -a highstandbythreshold 90
 /usr/bin/pmset -a hibernatemode 25
         fi
     else
-        echo "$(date -u) Settings for: os_hibernate_mode_intel_enable already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: os_hibernate_mode_intel_enable already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) os_hibernate_mode_intel_enable has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "os_hibernate_mode_intel_enable has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: os_home_folders_secure -----#####
@@ -7021,7 +8003,7 @@ for userDirs in $( /usr/bin/find /System/Volumes/Data/Users -mindepth 1 -maxdept
 done
 unset IFS ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: os_home_folders_secure ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: os_home_folders_secure ..."
             IFS=$'\n'
 for userDirs in $( /usr/bin/find /System/Volumes/Data/Users -mindepth 1 -maxdepth 1 -type d ! \( -perm 700 -o -perm 711 \) | /usr/bin/grep -v "Shared" | /usr/bin/grep -v "Guest" ); do
   /bin/chmod og-rwx "$userDirs"
@@ -7029,10 +8011,10 @@ done
 unset IFS
         fi
     else
-        echo "$(date -u) Settings for: os_home_folders_secure already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: os_home_folders_secure already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) os_home_folders_secure has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "os_home_folders_secure has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: os_httpd_disable -----#####
@@ -7059,14 +8041,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $os_httpd_disable_audit_score == "true" ]]; then
         ask 'os_httpd_disable - Run the command(s)-> /bin/launchctl disable system/org.apache.httpd ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: os_httpd_disable ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: os_httpd_disable ..."
             /bin/launchctl disable system/org.apache.httpd
         fi
     else
-        echo "$(date -u) Settings for: os_httpd_disable already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: os_httpd_disable already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) os_httpd_disable has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "os_httpd_disable has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: os_install_log_retention_configure -----#####
@@ -7093,14 +8075,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $os_install_log_retention_configure_audit_score == "true" ]]; then
         ask 'os_install_log_retention_configure - Run the command(s)-> /usr/bin/sed -i '"'"''"'"' "s/\* file \/var\/log\/install.log.*/\* file \/var\/log\/install.log format='"'"'\$\(\(Time\)\(JZ\)\) \$Host \$\(Sender\)\[\$\(PID\\)\]: \$Message'"'"' rotate=utc compress file_max=50M size_only ttl=365/g" /etc/asl/com.apple.install ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: os_install_log_retention_configure ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: os_install_log_retention_configure ..."
             /usr/bin/sed -i '' "s/\* file \/var\/log\/install.log.*/\* file \/var\/log\/install.log format='\$\(\(Time\)\(JZ\)\) \$Host \$\(Sender\)\[\$\(PID\\)\]: \$Message' rotate=utc compress file_max=50M size_only ttl=365/g" /etc/asl/com.apple.install
         fi
     else
-        echo "$(date -u) Settings for: os_install_log_retention_configure already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: os_install_log_retention_configure already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) os_install_log_retention_configure has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "os_install_log_retention_configure has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: os_mobile_file_integrity_enable -----#####
@@ -7126,14 +8108,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $os_mobile_file_integrity_enable_audit_score == "true" ]]; then
         ask 'os_mobile_file_integrity_enable - Run the command(s)-> /usr/sbin/nvram boot-args="" ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: os_mobile_file_integrity_enable ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: os_mobile_file_integrity_enable ..."
             /usr/sbin/nvram boot-args=""
         fi
     else
-        echo "$(date -u) Settings for: os_mobile_file_integrity_enable already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: os_mobile_file_integrity_enable already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) os_mobile_file_integrity_enable has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "os_mobile_file_integrity_enable has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: os_nfsd_disable -----#####
@@ -7160,14 +8142,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $os_nfsd_disable_audit_score == "true" ]]; then
         ask 'os_nfsd_disable - Run the command(s)-> /bin/launchctl disable system/com.apple.nfsd ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: os_nfsd_disable ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: os_nfsd_disable ..."
             /bin/launchctl disable system/com.apple.nfsd
         fi
     else
-        echo "$(date -u) Settings for: os_nfsd_disable already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: os_nfsd_disable already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) os_nfsd_disable has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "os_nfsd_disable has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: os_password_hint_remove -----#####
@@ -7195,16 +8177,16 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
   /usr/bin/dscl . -delete /Users/$u hint
 done ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: os_password_hint_remove ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: os_password_hint_remove ..."
             for u in $(/usr/bin/dscl . -list /Users UniqueID | /usr/bin/awk '$2 > 500 {print $1}'); do
   /usr/bin/dscl . -delete /Users/$u hint
 done
         fi
     else
-        echo "$(date -u) Settings for: os_password_hint_remove already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: os_password_hint_remove already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) os_password_hint_remove has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "os_password_hint_remove has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: os_policy_banner_loginwindow_enforce -----#####
@@ -7234,7 +8216,7 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
 $bannerText
 EOF ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: os_policy_banner_loginwindow_enforce ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: os_policy_banner_loginwindow_enforce ..."
             bannerText="Center for Internet Security Test Message"
 /bin/mkdir /Library/Security/PolicyBanner.rtfd
 /usr/bin/textutil -convert rtf -output /Library/Security/PolicyBanner.rtfd/TXT.rtf -stdin <<EOF
@@ -7242,10 +8224,10 @@ $bannerText
 EOF
         fi
     else
-        echo "$(date -u) Settings for: os_policy_banner_loginwindow_enforce already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: os_policy_banner_loginwindow_enforce already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) os_policy_banner_loginwindow_enforce has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "os_policy_banner_loginwindow_enforce has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: os_power_nap_disable -----#####
@@ -7271,14 +8253,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $os_power_nap_disable_audit_score == "true" ]]; then
         ask 'os_power_nap_disable - Run the command(s)-> /usr/bin/pmset -a powernap 0 ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: os_power_nap_disable ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: os_power_nap_disable ..."
             /usr/bin/pmset -a powernap 0
         fi
     else
-        echo "$(date -u) Settings for: os_power_nap_disable already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: os_power_nap_disable already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) os_power_nap_disable has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "os_power_nap_disable has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: os_root_disable -----#####
@@ -7304,14 +8286,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $os_root_disable_audit_score == "true" ]]; then
         ask 'os_root_disable - Run the command(s)-> /usr/bin/dscl . -create /Users/root UserShell /usr/bin/false ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: os_root_disable ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: os_root_disable ..."
             /usr/bin/dscl . -create /Users/root UserShell /usr/bin/false
         fi
     else
-        echo "$(date -u) Settings for: os_root_disable already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: os_root_disable already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) os_root_disable has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "os_root_disable has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: os_show_filename_extensions_enable -----#####
@@ -7337,14 +8319,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $os_show_filename_extensions_enable_audit_score == "true" ]]; then
         ask 'os_show_filename_extensions_enable - Run the command(s)-> /usr/bin/sudo -u "$CURRENT_USER" /usr/bin/defaults write /Users/"$CURRENT_USER"/Library/Preferences/.GlobalPreferences AppleShowAllExtensions -bool true ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: os_show_filename_extensions_enable ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: os_show_filename_extensions_enable ..."
             /usr/bin/sudo -u "$CURRENT_USER" /usr/bin/defaults write /Users/"$CURRENT_USER"/Library/Preferences/.GlobalPreferences AppleShowAllExtensions -bool true
         fi
     else
-        echo "$(date -u) Settings for: os_show_filename_extensions_enable already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: os_show_filename_extensions_enable already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) os_show_filename_extensions_enable has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "os_show_filename_extensions_enable has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: os_sip_enable -----#####
@@ -7375,14 +8357,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $os_sip_enable_audit_score == "true" ]]; then
         ask 'os_sip_enable - Run the command(s)-> /usr/bin/csrutil enable ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: os_sip_enable ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: os_sip_enable ..."
             /usr/bin/csrutil enable
         fi
     else
-        echo "$(date -u) Settings for: os_sip_enable already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: os_sip_enable already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) os_sip_enable has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "os_sip_enable has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: os_sudo_timeout_configure -----#####
@@ -7409,15 +8391,15 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
         ask 'os_sudo_timeout_configure - Run the command(s)-> /usr/bin/find /etc/sudoers* -type f -exec sed -i '"'"''"'"' '"'"'/timestamp_timeout/d'"'"' '"'"'{}'"'"' \;
 /bin/echo "Defaults timestamp_timeout=0" >> /etc/sudoers.d/mscp ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: os_sudo_timeout_configure ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: os_sudo_timeout_configure ..."
             /usr/bin/find /etc/sudoers* -type f -exec sed -i '' '/timestamp_timeout/d' '{}' \;
 /bin/echo "Defaults timestamp_timeout=0" >> /etc/sudoers.d/mscp
         fi
     else
-        echo "$(date -u) Settings for: os_sudo_timeout_configure already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: os_sudo_timeout_configure already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) os_sudo_timeout_configure has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "os_sudo_timeout_configure has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: os_sudoers_timestamp_type_configure -----#####
@@ -7444,14 +8426,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $os_sudoers_timestamp_type_configure_audit_score == "true" ]]; then
         ask 'os_sudoers_timestamp_type_configure - Run the command(s)-> /usr/bin/find /etc/sudoers* -type f -exec sed -i '"'"''"'"' '"'"'/timestamp_type/d; /!tty_tickets/d'"'"' '"'"'{}'"'"' \; ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: os_sudoers_timestamp_type_configure ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: os_sudoers_timestamp_type_configure ..."
             /usr/bin/find /etc/sudoers* -type f -exec sed -i '' '/timestamp_type/d; /!tty_tickets/d' '{}' \;
         fi
     else
-        echo "$(date -u) Settings for: os_sudoers_timestamp_type_configure already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: os_sudoers_timestamp_type_configure already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) os_sudoers_timestamp_type_configure has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "os_sudoers_timestamp_type_configure has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: os_system_wide_applications_configure -----#####
@@ -7480,17 +8462,17 @@ for apps in $( /usr/bin/find /Applications -iname "*\.app" -type d -perm -2 ); d
   /bin/chmod -R o-w "$apps"
 done ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: os_system_wide_applications_configure ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: os_system_wide_applications_configure ..."
             IFS=$'\n'
 for apps in $( /usr/bin/find /Applications -iname "*\.app" -type d -perm -2 ); do
   /bin/chmod -R o-w "$apps"
 done
         fi
     else
-        echo "$(date -u) Settings for: os_system_wide_applications_configure already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: os_system_wide_applications_configure already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) os_system_wide_applications_configure has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "os_system_wide_applications_configure has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: os_time_offset_limit_configure -----#####
@@ -7516,14 +8498,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $os_time_offset_limit_configure_audit_score == "true" ]]; then
         ask 'os_time_offset_limit_configure - Run the command(s)-> /usr/bin/sntp -Ss $(/usr/sbin/systemsetup -getnetworktimeserver | /usr/bin/awk '"'"'{print $4}'"'"') ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: os_time_offset_limit_configure ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: os_time_offset_limit_configure ..."
             /usr/bin/sntp -Ss $(/usr/sbin/systemsetup -getnetworktimeserver | /usr/bin/awk '{print $4}')
         fi
     else
-        echo "$(date -u) Settings for: os_time_offset_limit_configure already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: os_time_offset_limit_configure already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) os_time_offset_limit_configure has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "os_time_offset_limit_configure has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: os_unlock_active_user_session_disable -----#####
@@ -7547,16 +8529,16 @@ EOS
 os_unlock_active_user_session_disable_audit_score=$($plb -c "print os_unlock_active_user_session_disable:finding" $audit_plist)
 if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $os_unlock_active_user_session_disable_audit_score == "true" ]]; then
-        ask 'os_unlock_active_user_session_disable - Run the command(s)-> /usr/bin/security authorizationdb write system.login.screensaver "use-login-window-ui" ' N
+        ask 'os_unlock_active_user_session_disable - Run the command(s)-> /usr/bin/security authorizationdb write system.login.screensaver "authenticate-session-owner" ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: os_unlock_active_user_session_disable ..." | /usr/bin/tee -a "$audit_log"
-            /usr/bin/security authorizationdb write system.login.screensaver "use-login-window-ui"
+            logmessage "Running the command to configure the settings for: os_unlock_active_user_session_disable ..."
+            /usr/bin/security authorizationdb write system.login.screensaver "authenticate-session-owner"
         fi
     else
-        echo "$(date -u) Settings for: os_unlock_active_user_session_disable already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: os_unlock_active_user_session_disable already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) os_unlock_active_user_session_disable has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "os_unlock_active_user_session_disable has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: os_world_writable_library_folder_configure -----#####
@@ -7585,17 +8567,17 @@ for libPermissions in $( /usr/bin/find /System/Volumes/Data/Library -type d -per
   /bin/chmod -R o-w "$libPermissions"
 done ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: os_world_writable_library_folder_configure ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: os_world_writable_library_folder_configure ..."
             IFS=$'\n'
 for libPermissions in $( /usr/bin/find /System/Volumes/Data/Library -type d -perm -2 | /usr/bin/grep -v Caches | /usr/bin/grep -v /Preferences/Audio/Data ); do
   /bin/chmod -R o-w "$libPermissions"
 done
         fi
     else
-        echo "$(date -u) Settings for: os_world_writable_library_folder_configure already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: os_world_writable_library_folder_configure already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) os_world_writable_library_folder_configure has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "os_world_writable_library_folder_configure has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: os_world_writable_system_folder_configure -----#####
@@ -7624,17 +8606,17 @@ for sysPermissions in $( /usr/bin/find /System/Volumes/Data/System -type d -perm
   /bin/chmod -R o-w "$sysPermissions"
 done ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: os_world_writable_system_folder_configure ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: os_world_writable_system_folder_configure ..."
             IFS=$'\n'
 for sysPermissions in $( /usr/bin/find /System/Volumes/Data/System -type d -perm -2 | /usr/bin/grep -v "downloadDir" ); do
   /bin/chmod -R o-w "$sysPermissions"
 done
         fi
     else
-        echo "$(date -u) Settings for: os_world_writable_system_folder_configure already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: os_world_writable_system_folder_configure already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) os_world_writable_system_folder_configure has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "os_world_writable_system_folder_configure has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: system_settings_bluetooth_sharing_disable -----#####
@@ -7662,14 +8644,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $system_settings_bluetooth_sharing_disable_audit_score == "true" ]]; then
         ask 'system_settings_bluetooth_sharing_disable - Run the command(s)-> /usr/bin/sudo -u "$CURRENT_USER" /usr/bin/defaults -currentHost write com.apple.Bluetooth PrefKeyServicesEnabled -bool false ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: system_settings_bluetooth_sharing_disable ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: system_settings_bluetooth_sharing_disable ..."
             /usr/bin/sudo -u "$CURRENT_USER" /usr/bin/defaults -currentHost write com.apple.Bluetooth PrefKeyServicesEnabled -bool false
         fi
     else
-        echo "$(date -u) Settings for: system_settings_bluetooth_sharing_disable already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: system_settings_bluetooth_sharing_disable already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) system_settings_bluetooth_sharing_disable has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "system_settings_bluetooth_sharing_disable has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: system_settings_cd_dvd_sharing_disable -----#####
@@ -7695,14 +8677,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $system_settings_cd_dvd_sharing_disable_audit_score == "true" ]]; then
         ask 'system_settings_cd_dvd_sharing_disable - Run the command(s)-> /bin/launchctl unload /System/Library/LaunchDaemons/com.apple.ODSAgent.plist ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: system_settings_cd_dvd_sharing_disable ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: system_settings_cd_dvd_sharing_disable ..."
             /bin/launchctl unload /System/Library/LaunchDaemons/com.apple.ODSAgent.plist
         fi
     else
-        echo "$(date -u) Settings for: system_settings_cd_dvd_sharing_disable already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: system_settings_cd_dvd_sharing_disable already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) system_settings_cd_dvd_sharing_disable has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "system_settings_cd_dvd_sharing_disable has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: system_settings_firewall_enable -----#####
@@ -7730,14 +8712,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $system_settings_firewall_enable_audit_score == "true" ]]; then
         ask 'system_settings_firewall_enable - Run the command(s)-> /usr/bin/defaults write /Library/Preferences/com.apple.alf globalstate -int 1 ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: system_settings_firewall_enable ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: system_settings_firewall_enable ..."
             /usr/bin/defaults write /Library/Preferences/com.apple.alf globalstate -int 1
         fi
     else
-        echo "$(date -u) Settings for: system_settings_firewall_enable already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: system_settings_firewall_enable already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) system_settings_firewall_enable has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "system_settings_firewall_enable has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: system_settings_firewall_stealth_mode_enable -----#####
@@ -7764,14 +8746,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $system_settings_firewall_stealth_mode_enable_audit_score == "true" ]]; then
         ask 'system_settings_firewall_stealth_mode_enable - Run the command(s)-> /usr/bin/defaults write /Library/Preferences/com.apple.alf stealthenabled -int 1 ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: system_settings_firewall_stealth_mode_enable ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: system_settings_firewall_stealth_mode_enable ..."
             /usr/bin/defaults write /Library/Preferences/com.apple.alf stealthenabled -int 1
         fi
     else
-        echo "$(date -u) Settings for: system_settings_firewall_stealth_mode_enable already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: system_settings_firewall_stealth_mode_enable already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) system_settings_firewall_stealth_mode_enable has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "system_settings_firewall_stealth_mode_enable has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: system_settings_guest_access_smb_disable -----#####
@@ -7797,14 +8779,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $system_settings_guest_access_smb_disable_audit_score == "true" ]]; then
         ask 'system_settings_guest_access_smb_disable - Run the command(s)-> /usr/sbin/sysadminctl -smbGuestAccess off ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: system_settings_guest_access_smb_disable ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: system_settings_guest_access_smb_disable ..."
             /usr/sbin/sysadminctl -smbGuestAccess off
         fi
     else
-        echo "$(date -u) Settings for: system_settings_guest_access_smb_disable already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: system_settings_guest_access_smb_disable already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) system_settings_guest_access_smb_disable has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "system_settings_guest_access_smb_disable has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: system_settings_hot_corners_secure -----#####
@@ -7833,17 +8815,17 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
 /usr/bin/sudo -u "$CURRENT_USER" /usr/bin/defaults delete /Users/"$CURRENT_USER"/Library/Preferences/com.apple.dock wvous-tr-corner 2>/dev/null
 /usr/bin/sudo -u "$CURRENT_USER" /usr/bin/defaults delete /Users/"$CURRENT_USER"/Library/Preferences/com.apple.dock wvous-br-corner 2>/dev/null ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: system_settings_hot_corners_secure ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: system_settings_hot_corners_secure ..."
             /usr/bin/sudo -u "$CURRENT_USER" /usr/bin/defaults delete /Users/"$CURRENT_USER"/Library/Preferences/com.apple.dock wvous-bl-corner 2>/dev/null
 /usr/bin/sudo -u "$CURRENT_USER" /usr/bin/defaults delete /Users/"$CURRENT_USER"/Library/Preferences/com.apple.dock wvous-tl-corner 2>/dev/null
 /usr/bin/sudo -u "$CURRENT_USER" /usr/bin/defaults delete /Users/"$CURRENT_USER"/Library/Preferences/com.apple.dock wvous-tr-corner 2>/dev/null
 /usr/bin/sudo -u "$CURRENT_USER" /usr/bin/defaults delete /Users/"$CURRENT_USER"/Library/Preferences/com.apple.dock wvous-br-corner 2>/dev/null
         fi
     else
-        echo "$(date -u) Settings for: system_settings_hot_corners_secure already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: system_settings_hot_corners_secure already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) system_settings_hot_corners_secure has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "system_settings_hot_corners_secure has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: system_settings_location_services_enable -----#####
@@ -7869,14 +8851,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $system_settings_location_services_enable_audit_score == "true" ]]; then
         ask 'system_settings_location_services_enable - Run the command(s)-> /usr/bin/defaults write /var/db/locationd/Library/Preferences/ByHost/com.apple.locationd LocationServicesEnabled -bool true; /bin/launchctl kickstart -k system/com.apple.locationd ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: system_settings_location_services_enable ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: system_settings_location_services_enable ..."
             /usr/bin/defaults write /var/db/locationd/Library/Preferences/ByHost/com.apple.locationd LocationServicesEnabled -bool true; /bin/launchctl kickstart -k system/com.apple.locationd
         fi
     else
-        echo "$(date -u) Settings for: system_settings_location_services_enable already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: system_settings_location_services_enable already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) system_settings_location_services_enable has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "system_settings_location_services_enable has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: system_settings_location_services_menu_enforce -----#####
@@ -7902,14 +8884,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $system_settings_location_services_menu_enforce_audit_score == "true" ]]; then
         ask 'system_settings_location_services_menu_enforce - Run the command(s)-> /usr/bin/defaults write /Library/Preferences/com.apple.locationmenu.plist ShowSystemServices -bool true ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: system_settings_location_services_menu_enforce ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: system_settings_location_services_menu_enforce ..."
             /usr/bin/defaults write /Library/Preferences/com.apple.locationmenu.plist ShowSystemServices -bool true
         fi
     else
-        echo "$(date -u) Settings for: system_settings_location_services_menu_enforce already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: system_settings_location_services_menu_enforce already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) system_settings_location_services_menu_enforce has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "system_settings_location_services_menu_enforce has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: system_settings_printer_sharing_disable -----#####
@@ -7936,15 +8918,15 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
         ask 'system_settings_printer_sharing_disable - Run the command(s)-> /usr/sbin/cupsctl --no-share-printers
 /usr/bin/lpstat -p | awk '"'"'{print $2}'"'"'| /usr/bin/xargs -I{} lpadmin -p {} -o printer-is-shared=false ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: system_settings_printer_sharing_disable ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: system_settings_printer_sharing_disable ..."
             /usr/sbin/cupsctl --no-share-printers
 /usr/bin/lpstat -p | awk '{print $2}'| /usr/bin/xargs -I{} lpadmin -p {} -o printer-is-shared=false
         fi
     else
-        echo "$(date -u) Settings for: system_settings_printer_sharing_disable already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: system_settings_printer_sharing_disable already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) system_settings_printer_sharing_disable has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "system_settings_printer_sharing_disable has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: system_settings_rae_disable -----#####
@@ -7972,15 +8954,15 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
         ask 'system_settings_rae_disable - Run the command(s)-> /usr/sbin/systemsetup -setremoteappleevents off
 /bin/launchctl disable system/com.apple.AEServer ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: system_settings_rae_disable ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: system_settings_rae_disable ..."
             /usr/sbin/systemsetup -setremoteappleevents off
 /bin/launchctl disable system/com.apple.AEServer
         fi
     else
-        echo "$(date -u) Settings for: system_settings_rae_disable already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: system_settings_rae_disable already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) system_settings_rae_disable has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "system_settings_rae_disable has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: system_settings_remote_management_disable -----#####
@@ -8006,14 +8988,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $system_settings_remote_management_disable_audit_score == "true" ]]; then
         ask 'system_settings_remote_management_disable - Run the command(s)-> /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -deactivate -stop ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: system_settings_remote_management_disable ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: system_settings_remote_management_disable ..."
             /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -deactivate -stop
         fi
     else
-        echo "$(date -u) Settings for: system_settings_remote_management_disable already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: system_settings_remote_management_disable already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) system_settings_remote_management_disable has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "system_settings_remote_management_disable has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: system_settings_screen_sharing_disable -----#####
@@ -8040,14 +9022,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $system_settings_screen_sharing_disable_audit_score == "true" ]]; then
         ask 'system_settings_screen_sharing_disable - Run the command(s)-> /bin/launchctl disable system/com.apple.screensharing ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: system_settings_screen_sharing_disable ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: system_settings_screen_sharing_disable ..."
             /bin/launchctl disable system/com.apple.screensharing
         fi
     else
-        echo "$(date -u) Settings for: system_settings_screen_sharing_disable already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: system_settings_screen_sharing_disable already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) system_settings_screen_sharing_disable has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "system_settings_screen_sharing_disable has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: system_settings_smbd_disable -----#####
@@ -8074,14 +9056,14 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $system_settings_smbd_disable_audit_score == "true" ]]; then
         ask 'system_settings_smbd_disable - Run the command(s)-> /bin/launchctl disable system/com.apple.smbd ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: system_settings_smbd_disable ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: system_settings_smbd_disable ..."
             /bin/launchctl disable system/com.apple.smbd
         fi
     else
-        echo "$(date -u) Settings for: system_settings_smbd_disable already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: system_settings_smbd_disable already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) system_settings_smbd_disable has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "system_settings_smbd_disable has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: system_settings_softwareupdate_current -----#####
@@ -8105,16 +9087,16 @@ EOS
 system_settings_softwareupdate_current_audit_score=$($plb -c "print system_settings_softwareupdate_current:finding" $audit_plist)
 if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $system_settings_softwareupdate_current_audit_score == "true" ]]; then
-        ask 'system_settings_softwareupdate_current - Run the command(s)-> /usr/sbin/softwareupdate -i -a -R ' N
+        ask 'system_settings_softwareupdate_current - Run the command(s)-> /usr/sbin/softwareupdate -i -a ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: system_settings_softwareupdate_current ..." | /usr/bin/tee -a "$audit_log"
-            /usr/sbin/softwareupdate -i -a -R
+            logmessage "Running the command to configure the settings for: system_settings_softwareupdate_current ..."
+            /usr/sbin/softwareupdate -i -a
         fi
     else
-        echo "$(date -u) Settings for: system_settings_softwareupdate_current already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: system_settings_softwareupdate_current already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) system_settings_softwareupdate_current has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "system_settings_softwareupdate_current has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: system_settings_ssh_disable -----#####
@@ -8142,15 +9124,15 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
         ask 'system_settings_ssh_disable - Run the command(s)-> /usr/sbin/systemsetup -f -setremotelogin off >/dev/null
 /bin/launchctl disable system/com.openssh.sshd ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: system_settings_ssh_disable ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: system_settings_ssh_disable ..."
             /usr/sbin/systemsetup -f -setremotelogin off >/dev/null
 /bin/launchctl disable system/com.openssh.sshd
         fi
     else
-        echo "$(date -u) Settings for: system_settings_ssh_disable already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: system_settings_ssh_disable already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) system_settings_ssh_disable has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "system_settings_ssh_disable has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: system_settings_system_wide_preferences_configure -----#####
@@ -8187,7 +9169,7 @@ key_value=$(/usr/libexec/PlistBuddy -c "Print :shared" "/tmp/$section.plist" 2>&
   	/usr/bin/security -q authorizationdb write "$section" < "/tmp/$section.plist"
 done ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: system_settings_system_wide_preferences_configure ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: system_settings_system_wide_preferences_configure ..."
             authDBs=("system.preferences" "system.preferences.energysaver" "system.preferences.network" "system.preferences.printing" "system.preferences.sharing" "system.preferences.softwareupdate" "system.preferences.startupdisk" "system.preferences.timemachine")
 
 for section in ${authDBs[@]}; do
@@ -8202,10 +9184,10 @@ key_value=$(/usr/libexec/PlistBuddy -c "Print :shared" "/tmp/$section.plist" 2>&
 done
         fi
     else
-        echo "$(date -u) Settings for: system_settings_system_wide_preferences_configure already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: system_settings_system_wide_preferences_configure already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) system_settings_system_wide_preferences_configure has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "system_settings_system_wide_preferences_configure has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 #####----- Rule: system_settings_wake_network_access_disable -----#####
@@ -8231,23 +9213,46 @@ if [[ ! $exempt == "1" ]] || [[ -z $exempt ]];then
     if [[ $system_settings_wake_network_access_disable_audit_score == "true" ]]; then
         ask 'system_settings_wake_network_access_disable - Run the command(s)-> /usr/bin/pmset -a womp 0 ' N
         if [[ $? == 0 ]]; then
-            echo "$(date -u) Running the command to configure the settings for: system_settings_wake_network_access_disable ..." | /usr/bin/tee -a "$audit_log"
+            logmessage "Running the command to configure the settings for: system_settings_wake_network_access_disable ..."
             /usr/bin/pmset -a womp 0
         fi
     else
-        echo "$(date -u) Settings for: system_settings_wake_network_access_disable already configured, continuing..." | /usr/bin/tee -a "$audit_log"
+        logmessage "Settings for: system_settings_wake_network_access_disable already configured, continuing..."
     fi
 elif [[ ! -z "$exempt_reason" ]];then
-    echo "$(date -u) system_settings_wake_network_access_disable has an exemption, remediation skipped (Reason: "$exempt_reason")" | /usr/bin/tee -a "$audit_log"
+    logmessage "system_settings_wake_network_access_disable has an exemption, remediation skipped (Reason: "$exempt_reason")"
 fi
     
 echo "$(date -u) Remediation complete" >> "$audit_log"
 
-}
+} 2>/dev/null
 
-zparseopts -D -E -check=check -fix=fix -stats=stats -compliant=compliant_opt -non_compliant=non_compliant_opt -reset=reset -cfc=cfc
+usage=(
+    "$0 Usage"
+    "$0 [--check] [--fix] [--cfc] [--stats] [--compliant] [--non_compliant] [--reset] [--reset-all] [--quiet=<value>]"
+    " "
+    "Optional parameters:"
+    "--check            :   run the compliance checks without interaction"
+    "--fix              :   run the remediation commands without interation"
+    "--cfc              :   runs a check, fix, check without interaction"
+    "--stats            :   display the statistics from last compliance check"
+    "--compliant        :   reports the number of compliant checks"
+    "--non_compliant    :   reports the number of non_compliant checks"
+    "--reset            :   clear out all results for current baseline"
+    "--reset-all        :   clear out all results for ALL MSCP baselines"
+    "--quiet=<value>    :   1 - show only failed and exempted checks in output"
+    "                       2 - show minimal output"
+  )
 
-if [[ $reset ]]; then reset_plist; fi
+zparseopts -D -E -help=flag_help -check=check -fix=fix -stats=stats -compliant=compliant_opt -non_compliant=non_compliant_opt -reset=reset -reset-all=reset_all -cfc=cfc -quiet:=quiet || { print -l $usage && return }
+
+[[ -z "$flag_help" ]] || { print -l $usage && return }
+
+if [[ ! -z $quiet ]];then
+  [[ ! -z ${quiet[2][2]} ]] || { print -l $usage && return }
+fi
+
+if [[ $reset ]] || [[ $reset_all ]]; then reset_plist; fi
 
 if [[ $check ]] || [[ $fix ]] || [[ $cfc ]] || [[ $stats ]] || [[ $compliant_opt ]] || [[ $non_compliant_opt ]]; then
     if [[ $fix ]]; then run_fix; fi
@@ -8268,4 +9273,3 @@ if [[ "$ssh_key_check" -ne 0 ]]; then
     /bin/rm /etc/ssh/ssh_host_rsa_key.pub
     ssh_key_check=0
 fi
-    
